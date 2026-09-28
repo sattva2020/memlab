@@ -73,6 +73,20 @@ TOOLS = [
 
 
 NOTES_DIR = "docs/notes"
+# One JSON line per server start, index build and tool call: which servers hang, what agents
+# actually ask, what came back. Outside every served project; user data, never committed.
+LOG = Path(os.environ.get("MEMLAB_LOG") or Path(__file__).resolve().parents[1] / "logs" / "calls.jsonl")
+_log_lock = threading.Lock()
+
+
+def journal(event: str, **fields) -> None:
+    rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), "pid": os.getpid(), "event": event, **fields}
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _log_lock, open(LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass                     # the journal must never break a tool call
 
 
 def write_note(root: Path, summary: str, body: str = "", kind: str = "decision",
@@ -126,9 +140,14 @@ class Index:
                                             encoder=embedder.Client(QWEN, max_len=512))
             log(f"index ready: {len(self.chunks)} chunks, {len(self.dec_ids)} decision chunks, "
                 f"re-embedded {self.dense.reembedded}+{self.dec_dense.reembedded}, {time.time() - t:.0f}s")
+            self.dense.scores("warm up")        # start the shared embedder and load both models now,
+            self.dec_dense.scores("warm up")    # not inside the first tool call (was 41 s after an idle exit)
+            journal("ready", root=str(self.root), chunks=len(self.chunks), seconds=round(time.time() - t, 1),
+                    reembedded=self.dense.reembedded + self.dec_dense.reembedded)
         except Exception as e:  # surfaced to the caller instead of a silent dead server
             self.error = f"{type(e).__name__}: {e}"
             log(f"index build failed: {self.error}")
+            journal("build_failed", root=str(self.root), error=self.error)
         finally:
             self.ready.set()
 
@@ -224,8 +243,18 @@ def serve(config: Path, root: Path) -> None:
     stdin = os.fdopen(os.dup(0), "rb")
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
     sys.stdin = open(os.devnull)
+    journal("start", root=str(root.resolve()), config=str(config))
     index = Index(root.resolve(), cfg)
     out = sys.stdout.buffer
+
+    def journal_call(name, a, t0, text=None, error=None):
+        try:
+            args = {k: (v[:300] if isinstance(v, str) else v) for k, v in a.items() if k != "body"}
+            top = [ln[4:].split()[0] for ln in (text or "").splitlines() if ln.startswith("### ")][:10]
+            journal("call", root=str(index.root), tool=name, args=args, ms=round(1000 * (time.time() - t0)),
+                    top=top, error=error)
+        except Exception:
+            pass                 # malformed arguments are the caller's error, not a reason to stop serving
 
     def send(msg: dict) -> None:
         out.write((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -250,6 +279,7 @@ def serve(config: Path, root: Path) -> None:
                 result = {"tools": TOOLS}
             elif method == "tools/call":
                 name, a = params.get("name"), params.get("arguments") or {}
+                t0 = time.time()
                 if name == "search_code":
                     text = index.search_code(a["query"], min(int(a.get("budget_tokens", 6000)), 20000))
                 elif name == "search_decisions":
@@ -264,6 +294,7 @@ def serve(config: Path, root: Path) -> None:
                 else:
                     raise ValueError(f"unknown tool {name}")
                 result = {"content": [{"type": "text", "text": text}], "isError": False}
+                journal_call(name, a, t0, text)
             elif method == "ping":
                 result = {}
             else:
@@ -272,6 +303,7 @@ def serve(config: Path, root: Path) -> None:
             send({"jsonrpc": "2.0", "id": rid, "result": result})
         except Exception as e:
             if method == "tools/call":
+                journal_call(params.get("name"), params.get("arguments") or {}, t0, error=f"{type(e).__name__}: {e}")
                 send({"jsonrpc": "2.0", "id": rid,
                       "result": {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True}})
             else:
