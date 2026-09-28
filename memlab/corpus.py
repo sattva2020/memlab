@@ -104,8 +104,10 @@ def chunk_file(path: str, text: str) -> list[Chunk]:
 
 def list_files(root: Path, include: list[str], exclude: list[str], max_bytes: int,
                keep_always: list[str] = ()) -> list[str]:
-    """git-tracked text files; `keep_always` globs override `exclude`."""
-    out = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True,
+    """Text files git knows or would track (untracked but not ignored: a note written this
+    session counts before its commit); `keep_always` globs override `exclude`."""
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
+                         capture_output=True,
                          text=True, encoding="utf-8", check=True).stdout.splitlines()
     keep = []
     for p in out:

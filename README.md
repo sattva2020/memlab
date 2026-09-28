@@ -66,6 +66,7 @@ python -m memlab hook-install --config projects/myrepo.toml --root /path/to/repo
 |---|---|
 | `search_code` | Files, classes and functions relevant to a task, with `path:line`. Code only. |
 | `search_decisions` | ADRs, postmortems and session notes that explain *why* — one best passage per document. |
+| `add_note` | Records a decision as a new file in `docs/notes/` (never edits one, so worktrees merge cleanly); searchable at once. |
 | `explain` | A symbol or file: where it is defined, who uses it, what it uses, linked docs and decisions. |
 | `find_path` | The shortest chain of imports and symbol references between two files or symbols. |
 | `graph.html` | One self-contained page: subsystems (Louvain), search, click a file for its symbols and neighbours, deep links (`graph.html#src/hono.ts`). |

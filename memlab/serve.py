@@ -12,8 +12,11 @@ start-up, so `initialize` and `tools/list` answer immediately.
 """
 from __future__ import annotations
 
+import datetime
 import fnmatch
+import hashlib
 import json
+import re
 import sys
 import threading
 import time
@@ -45,6 +48,16 @@ TOOLS = [
          "query": {"type": "string"},
          "k": {"type": "integer", "description": "documents to return (default 5, max 15)"}},
          "required": ["query"]}},
+    {"name": "add_note",
+     "description": ("Record a decision, conclusion or postmortem so later sessions find it with "
+                     "search_decisions. Writes a new markdown file under docs/notes/ (never edits an "
+                     "existing one, so worktrees merge cleanly); commit it with your change."),
+     "inputSchema": {"type": "object", "properties": {
+         "summary": {"type": "string", "description": "one line: what was decided and why"},
+         "body": {"type": "string", "description": "details: context, alternatives, file paths"},
+         "type": {"type": "string", "enum": ["decision", "note", "postmortem"]},
+         "tags": {"type": "array", "items": {"type": "string"}}},
+         "required": ["summary"]}},
     {"name": "explain",
      "description": ("Explain a symbol or file: where it is defined, which files use it and what it uses, "
                      "its code/doc/decision neighbours in the project graph, and related decisions."),
@@ -56,6 +69,25 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a", "b"]}},
 ]
+
+
+NOTES_DIR = "docs/notes"
+
+
+def write_note(root: Path, summary: str, body: str = "", kind: str = "decision",
+               tags: list[str] | None = None, now: datetime.datetime | None = None) -> str:
+    """A new note file, one per call: date + slug + content hash, created exclusively."""
+    now = now or datetime.datetime.now()
+    slug = "-".join(re.findall(r"[^\W_]+", summary.lower()))[:60].strip("-") or "note"
+    text = (f"---\ntype: {kind}\ncreated: '{now.isoformat(timespec='seconds')}'\n"
+            f"tags: {json.dumps(tags or [], ensure_ascii=False)}\n"
+            f"summary: {json.dumps(summary, ensure_ascii=False)}\n---\n# {summary}\n\n{body}".rstrip() + "\n")
+    h = hashlib.sha1(text.encode()).hexdigest()[:8]
+    rel = f"{NOTES_DIR}/{now:%Y-%m-%d}-{slug}-{h}.md"
+    (root / NOTES_DIR).mkdir(parents=True, exist_ok=True)
+    with open(root / rel, "x", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    return rel
 
 
 def log(msg: str) -> None:
@@ -75,7 +107,7 @@ class Index:
             c = self.cfg.get("corpus", {})
             self.chunks = corpus.build(self.root, c.get("include", []), c.get("exclude", []),
                                        c.get("max_bytes", 400_000), c.get("keep_always", []))
-            globs = self.cfg.get("channels", {}).get("decisions", [])
+            globs = self.cfg.get("channels", {}).get("decisions", []) + [f"{NOTES_DIR}/*"]
             self.is_dec = np.array([any(fnmatch.fnmatch(x.path, g) for g in globs) for x in self.chunks])
             self.is_code = np.array([Path(x.path).suffix.lower() in corpus.CODE_EXT for x in self.chunks])
             self.bm25 = retrieve.BM25([retrieve.tokenize(f"{x.path} {x.symbol} {x.text}") for x in self.chunks])
@@ -128,6 +160,22 @@ class Index:
                 if len(out) == k:
                     break
         return self._render(out, f"search_decisions: {len(out)} documents", max_chars=1600)
+
+    def add_note(self, summary: str, body: str, kind: str, tags: list[str]) -> str:
+        """Write the note and make it searchable at once (decision channel only; the rest of
+        the index picks it up at the next start)."""
+        self.wait()
+        rel = write_note(self.root, summary, body, kind, tags)
+        new = corpus.chunk_file(rel, (self.root / rel).read_text(encoding="utf-8"))
+        n = len(self.chunks)
+        self.chunks = self.chunks + new
+        self.is_dec = np.concatenate([self.is_dec, np.ones(len(new), bool)])
+        self.is_code = np.concatenate([self.is_code, np.zeros(len(new), bool)])
+        self.dec_ids = np.concatenate([self.dec_ids, np.arange(n, n + len(new))])
+        vecs = self.dec_dense.model.encode([f"{c.path} {c.symbol}\n{c.text}" for c in new],
+                                           normalize_embeddings=True)
+        self.dec_dense.emb = np.vstack([self.dec_dense.emb, vecs.astype(np.float32)])
+        return f"saved {rel} (searchable now; commit it with your change)"
 
     def explain(self, name: str) -> str:
         self.wait()
@@ -198,6 +246,9 @@ def serve(config: Path, root: Path) -> None:
                     text = index.search_code(a["query"], min(int(a.get("budget_tokens", 6000)), 20000))
                 elif name == "search_decisions":
                     text = index.search_decisions(a["query"], min(int(a.get("k", 5)), 15))
+                elif name == "add_note":
+                    text = index.add_note(a["summary"], a.get("body", ""), a.get("type", "decision"),
+                                          a.get("tags") or [])
                 elif name == "explain":
                     text = index.explain(a["name"])
                 elif name == "find_path":
