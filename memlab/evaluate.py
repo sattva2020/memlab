@@ -86,3 +86,13 @@ def bootstrap_diff(a: np.ndarray, b: np.ndarray, n: int = 10000, seed: int = 0) 
     rng = np.random.default_rng(seed)
     means = d[rng.integers(0, len(d), size=(n, len(d)))].mean(axis=1)
     return float(d.mean()), float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def alternate(base: list[str], side: list[str]) -> list[str]:
+    """Base and side lists interleaved, base first, duplicates dropped (H14 pointer next to a tool)."""
+    out: list[str] = []
+    for i in range(max(len(base), len(side))):
+        for lst in (base, side):
+            if i < len(lst) and lst[i] not in out:
+                out.append(lst[i])
+    return out

@@ -106,7 +106,8 @@ def cmd_eval(args):
         ext[f"ext:{name}"] = json.loads(Path(path).read_text(encoding="utf-8"))
         methods.append(f"ext:{name}")
 
-    need_commits = any("commits=1" in m or m == "hybrid+c" for m in methods)
+    need_commits = any("commits=1" in m or m == "hybrid+c" or m.startswith("ptr:") for m in methods)
+    code_paths = {c.path for c in chunks if Path(c.path).suffix.lower() in corpus.CODE_EXT}
     cch = commits.CommitChannel(root, chunks) if need_commits else None
     scope = re.compile(r"^[\w./-]+:\s+")
 
@@ -159,6 +160,11 @@ def cmd_eval(args):
                 on = bool(is_decision[r["hybrid"][:int(topk)]].any())
                 gate_on[m] = gate_on.get(m, 0) + on
                 r[m] = (dec, r[base], float(share)) if on else r[base]
+        for m in methods:
+            if m.startswith("ptr:"):     # ptr:<k>:<cost>:<base> — H14, base tool + a k-path pointer from past commits
+                _, kk, cost, base = m.split(":", 3)
+                fs = {f: v for f, v in cch.file_scores(k["id"], q).items() if f in code_paths}
+                r[m] = ("ptr", sorted(fs, key=fs.get, reverse=True)[:int(kk)], r[base], int(cost))
         for m, data in ext.items():
             r[m] = data[k["id"]]
         rankings[k["id"]] = r
@@ -166,6 +172,9 @@ def cmd_eval(args):
     def picked(rk, budget):
         if isinstance(rk, dict):     # external system: files it surfaced at this token budget
             return [corpus.Chunk(p, p, "", "") for p in rk["files"][str(budget)]]
+        if isinstance(rk, tuple) and rk[0] == "ptr":
+            _, files, base, cost = rk
+            return evaluate.select(base, chunks, budget - cost) + [corpus.Chunk(f, f, "", "") for f in files]
         if isinstance(rk, tuple):
             side, main, share = rk
             return evaluate.select_channel(side, main, chunks, budget, share)
@@ -202,6 +211,8 @@ def cmd_eval(args):
     def order(rk):
         if isinstance(rk, dict):
             return rk["order"]
+        if isinstance(rk, tuple) and rk[0] == "ptr":
+            return evaluate.alternate(evaluate.files_in_order(rk[2], chunks, 20), rk[1])
         if isinstance(rk, tuple):
             return None
         return evaluate.files_in_order(rk, chunks, 20)
