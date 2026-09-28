@@ -1,7 +1,8 @@
 """MCP server (stdio, JSON-RPC 2.0, newline-delimited) with two project-memory tools.
 
   search_code      — the stage 3 system: hybrid (BM25 + dense) seed → graphify-style seeds →
-                     PPR over df-capped symbol references with hubs blocked as transit.
+                     PPR over df-capped symbol references with hubs blocked as transit →
+                     code only → top 50 re-ordered by a multilingual cross-encoder (H15; GPU only).
   search_decisions — Qwen3 dense over decision memory (session notes, ADRs, postmortems);
                      BM25 dropped: it buried paraphrased answers (H13).
 
@@ -29,6 +30,8 @@ from . import config, corpus, embedder, evaluate, explore, graph, retrieve
 
 E5 = "intfloat/multilingual-e5-small"
 QWEN = "Qwen/Qwen3-Embedding-0.6B"
+RERANKER = "BAAI/bge-reranker-v2-m3"
+RERANK_TOP = 50
 QWEN_INSTRUCT = ("Instruct: Given a question about a software project, retrieve the notes, "
                  "decision records and postmortems that answer it\nQuery: ")
 
@@ -140,6 +143,9 @@ class Index:
                 f"re-embedded {self.dense.reembedded}+{self.dec_dense.reembedded}, {time.time() - t:.0f}s")
             self.dense.scores("warm up")        # start the shared embedder and load both models now,
             self.dec_dense.scores("warm up")    # not inside the first tool call (was 41 s after an idle exit)
+            self.reranker = None if os.environ.get("MEMLAB_RERANK") == "0" else embedder.Client(RERANKER)
+            if self.reranker and self.reranker.rerank("warm up", ["warm up"]) is None:
+                self.reranker = None            # no GPU: keep the plain ranking
             journal("ready", root=str(self.root), chunks=len(self.chunks), seconds=round(time.time() - t, 1),
                     reembedded=self.dense.reembedded + self.dec_dense.reembedded)
         except Exception as e:  # surfaced to the caller instead of a silent dead server
@@ -165,8 +171,17 @@ class Index:
         seeds = self._gfy_seeds(qt, bs, rd, rh)
         ranking = self.graph.ppr(seed, {"refs"}, transit_block=True, seed_ids=seeds)
         ranking = ranking[self.is_code[ranking]]                      # code only (H8); prose has its own tool
+        if self.reranker:
+            head = ranking[:RERANK_TOP]
+            s = self.reranker.rerank(query, [self._pair_text(i) for i in head])
+            if s is not None:
+                ranking = np.concatenate([head[np.argsort(-s, kind="stable")], ranking[RERANK_TOP:]])
         picked = evaluate.select(ranking, self.chunks, budget)
         return self._render(picked, f"search_code: {len(picked)} chunks, ~{budget} tokens budget")
+
+    def _pair_text(self, i: int) -> str:
+        c = self.chunks[i]
+        return f"{c.path} {c.symbol}" + chr(10) + c.text
 
     def search_decisions(self, query: str, k: int) -> str:
         self.wait()

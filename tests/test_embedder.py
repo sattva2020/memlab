@@ -29,3 +29,33 @@ def test_dense_over_no_chunks_scores_nothing(tmp_path):
     from memlab.retrieve import Dense
     d = Dense([], "unused", tmp_path, encoder=Fake())
     assert d.scores("anything").shape == (0,)
+
+
+class FakeCE:
+    def predict(self, pairs, **_):
+        return np.array([len(t) for _, t in pairs], dtype=np.float32)
+
+
+def _server(monkeypatch, reranker):
+    monkeypatch.setattr(embedder, "_load_reranker", lambda model: reranker)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), embedder._Handler)
+    srv.last = time.time()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_rerank_scores_pairs_and_is_none_without_gpu(monkeypatch):
+    embedder._models.clear()
+    srv = _server(monkeypatch, FakeCE())
+    try:
+        s = embedder.Client("ce", port=srv.server_address[1]).rerank("q", ["a", "bbb", "cc"])
+        assert s.tolist() == [1, 3, 2]
+    finally:
+        srv.shutdown()
+    embedder._models.clear()
+    srv = _server(monkeypatch, None)
+    try:
+        assert embedder.Client("ce", port=srv.server_address[1]).rerank("q", ["a"]) is None
+    finally:
+        srv.shutdown()
+        embedder._models.clear()

@@ -55,8 +55,9 @@ from `tsconfig.json`, skips lockfiles and generated code, and treats `docs/adr/`
 `docs/decisions/`, `docs/postmortems/` and `docs/notes/` as decision memory. To change any of
 that, put the section into `.memlab.toml` at the repository root (see `projects/example.toml`).
 
-The two embedding models are loaded once per machine, in a small background process on
-127.0.0.1 that every session shares and that exits after 30 idle minutes. Caches and the call
+The two embedding models and the re-ranker (about 2.6 GB of VRAM together) are loaded once per
+machine, in a small background process on 127.0.0.1 that every session shares and that exits
+after 30 idle minutes. Without a GPU there is no re-ranking; `MEMLAB_RERANK=0` turns it off. Caches and the call
 journal (`logs/calls.jsonl`) live in `~/.memlab` (set `MEMLAB_HOME` to move them).
 
 Keep it fresh after every commit (runs in the background, never blocks a commit):
@@ -69,7 +70,7 @@ memlab hook-install --root /path/to/repo
 
 | | What it does |
 |---|---|
-| `search_code` | Files, classes and functions relevant to a task, with `path:line`. Code only. |
+| `search_code` | Files, classes and functions relevant to a task, with `path:line`. Code only; on a GPU the top 50 are re-ordered by a multilingual cross-encoder, so a question in Russian finds English code. |
 | `search_decisions` | ADRs, postmortems and session notes that explain *why* — one best passage per document. |
 | `add_note` | Records a decision as a new file in `docs/notes/` (never edits one, so worktrees merge cleanly); searchable at once. |
 | `explain` | A symbol or file: where it is defined, who uses it, what it uses, linked docs and decisions. |

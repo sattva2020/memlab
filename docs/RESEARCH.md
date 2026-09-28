@@ -729,3 +729,99 @@ language effect (the omitted docs are *less* often Russian, 29% vs 39%); plausib
 of dot-directories, not verified. Where the documents are present (cryonick hard set: 12 of 30
 gold documents have nodes) it still returns none of them in the top 20.
 
+### Stage 11 — H14, past tasks as a pointer, not a fused ranking (pre-registered 2026-09-28)
+
+Prompted by Memorable (YC, "procedural memory": record how a past task was done, inject a
+50–300-token pointer when a similar task returns). H9 already tested past commits as a
+*ranking* signal (RRF into the seed) and failed. H14 tests the other form: the same channel as
+a short **pointer of file paths** shown next to the unchanged code tool, which is how
+procedural memory is actually delivered.
+
+- **Pointer P**: the H9 channel unchanged (BM25 over subjects of commits strictly before the
+  case's commit, files scored score / files-in-commit, top 20 commits), code files only, top
+  **5** paths. Its cost is charged as **100 tokens** taken from the code tool's budget.
+- **Base**: the production `search_code` — `only:code:C`, e5-small, stopwords (as in stage 9).
+- **U = base + P**. Budget cells: file recall of base's chunks at (budget − 100) ∪ P.
+  Ranking cells (same number of file names shown): base and P alternate, base first, so
+  files@5 = 3 + 2, files@10 = 5 + 5, files@20 = 15 + 5. Symbol level is not reported (P
+  carries no symbols).
+- **Sets**: the four git code sets (aifc360 80, cryonick 80, healbot 25, whalecast 22).
+  aifc360 natural is excluded in advance: its cases have no commit, so no time mask.
+- **Criterion H14**: U − base has CI above 0 in ≥1 cell (4k / 16k / 38k / files@5 / @10 / @20)
+  on ≥2 of 4 corpora, and is not significantly worse in any cell on any corpus.
+- **Reported, not part of the criterion**: the same run with `--strip-scope` (R2 showed the
+  scope prefix leaks; it can leak into commit subjects too).
+
+#### Result (run 2026-09-28, `results/*-s11-*.json`, log `results/stage11.log`)
+
+U − base; * = 95% CI excludes 0. Cells: 4k / 16k / 38k / files@5 / @10 / @20.
+
+| Corpus | scope kept | scope stripped |
+|---|---|---|
+| aifc360 | **+0.11*** / **+0.03*** / **+0.03*** / **−0.10*** / −0.02 / +0.01 | **+0.09*** / **+0.04*** / **+0.03*** / −0.09 / −0.02 / +0.00 |
+| cryonick | **+0.07*** / **+0.03*** / +0.02 / −0.05 / −0.04 / +0.01 | +0.02 / +0.01 / +0.01 / **−0.07*** / **−0.10*** / −0.01 |
+| healbot | **+0.14*** / **+0.10*** / **+0.10*** / +0.01 / −0.05 / **+0.10*** | **+0.13*** / +0.04 / +0.02 / +0.07 / −0.04 / +0.02 |
+| whalecast | 0.00 / 0.00 / 0.00 / −0.05 / **−0.13*** / −0.01 | −0.02 / 0.00 / 0.00 / −0.02 / **−0.17*** / −0.01 |
+
+- **H14 — not met.** The gain side holds (significant cells on 3 of 4 corpora), but U is
+  significantly worse on aifc360 files@5 (−0.10*) and WhaleCast files@10 (−0.13*), and the
+  criterion allowed no such cell.
+- The split is by kind of cell. **Budget cells**: five paths for 100 tokens only add, and they
+  add most where the budget is tight (4k: +0.07…+0.14). **Ranking cells** (same number of names
+  shown): past-commit files displace the code tool's own head and lose — the H9 result again,
+  in another form. A pointer is worth having *on top of* the tool, not *instead of* its top slots.
+- Caveat, as in stages 9–10: a budget cell counts a *named* file as seen, and a name is far
+  cheaper than the file's code, so the budget gains partly measure that asymmetry.
+- Scope leakage is real here too: on Cryonick the gains vanish without the scope prefix.
+- Base check: base numbers reproduce stage 9 exactly on Cryonick and within ≤0.02 elsewhere
+  (aifc360 0.01, HealBot 0.01, WhaleCast 0.02; embeddings were recomputed in a fresh cache).
+
+### Stage 12 — H15, a cross-encoder for Russian questions about English code (pre-registered 2026-09-28)
+
+Live miss: for «как считаются повторения при приседаниях» `search_code` ranks
+`entitlements_provider.dart` first and `AdaptiveRepCounter` 8th. Diagnosis: BM25 finds no
+Russian word in English code (the target file is ~1250th), e5 puts it ~190th; only Russian docs
+bridge to it through the graph. A code-only seed made it worse (~730th). A cross-encoder reads
+the question and the code together, so it can connect the two languages where both
+retrievers see no overlap.
+
+- **U**: the production `search_code` (`only:code:C`, e5-small, stopwords); its first **50**
+  chunks re-ordered by `BAAI/bge-reranker-v2-m3` (Apache-2.0, multilingual, fp16 on GPU,
+  max length 512) on (query, `path symbol` + chunk text); the rest of the ranking unchanged.
+- **Base**: the same ranking without re-ordering.
+- **Sets**: Russian queries (a query containing Cyrillic) of aifc360 natural (29), Cryonick git
+  (80), HealBot git (19), WhaleCast git (22). English guards: aifc360 git (80) and the
+  English aifc360 natural queries (19).
+- **Criterion H15**: U − base has CI above 0 in ≥1 cell (4k / 16k / 38k file level / files@5 /
+  @10 / @20) on ≥2 of the 4 Russian sets, and is significantly worse in no cell on any of the
+  six sets.
+- **Reported, not part of the criterion**: the live squat query on the working tree (rank of
+  `rep_counter.dart` before and after), and the added latency per query.
+
+#### Result (run 2026-09-28, `results/*-s12-*.json`, log `results/stage12.log`)
+
+A first run failed before any measurement (the method list lacked the `C` ranking that
+`only:code:C` filters); fixed in the script and re-run unchanged otherwise.
+
+U − base; * = 95% CI excludes 0. Cells: 4k / 16k / 38k file level / files@5 / @10 / @20.
+
+| Set | n | U − base | base |
+|---|---|---|---|
+| aifc360 natural, RU | 29 | **+0.14*** / +0.05 / −0.02 / **+0.20*** / **+0.10*** / **+0.09*** | 0.49 / 0.64 / 0.71 / 0.43 / 0.58 / 0.62 |
+| Cryonick git, RU | 80 | **+0.07*** / +0.00 / +0.00 / **+0.19*** / +0.07 / +0.03 | 0.70 / 0.87 / 0.91 / 0.57 / 0.72 / 0.82 |
+| HealBot git, RU | 19 | **+0.12*** / +0.03 / +0.00 / **+0.32*** / **+0.19*** / +0.04 | 0.64 / 0.79 / 0.86 / 0.38 / 0.61 / 0.78 |
+| WhaleCast git, RU | 22 | −0.08 / +0.00 / +0.00 / **+0.15*** / +0.05 / +0.04 | 0.86 / 0.94 / 0.97 / 0.56 / 0.77 / 0.91 |
+| aifc360 git, EN (guard) | 80 | **+0.09*** / +0.01 / +0.00 / **+0.18*** / **+0.11*** / +0.03 | 0.72 / 0.90 / 0.93 / 0.59 / 0.76 / 0.88 |
+| aifc360 natural, EN (guard) | 19 | +0.07 / −0.02 / +0.00 / +0.10 / +0.07 / +0.00 | 0.79 / 0.96 / 1.00 / 0.76 / 0.88 / 0.95 |
+
+- **H15 — met.** Significant gains on all four Russian sets (the rule needed two), none
+  significantly worse anywhere. The gain sits at the head of the list — files@5 +0.15…+0.32 —
+  and at the tight 4k budget; at 16k–38k base already holds the file.
+- Not only a language bridge: the English guard set gains as much (files@5 +0.18*). The
+  cross-encoder is a better judge of the top 50 in general.
+- Latency: median 580–670 ms per query on the RTX 2070 (fp16, 50 pairs, max length 512).
+- Live squat query: the top five changes from `entitlements_provider.dart`, a web page, a
+  LightRAG loader… to `exercise_config.dart`, `pose_processor.dart`, `coach_service.dart`,
+  `prompt_quality_test.dart`, `rep_counter_test.dart`; `rep_counter.dart` itself moves only
+  7th → 6th (for «подсчёт повторений упражнения» 17th → 10th). A control query about the paywall
+  keeps `elite_gate.dart` and `entitlements.dart` on top.

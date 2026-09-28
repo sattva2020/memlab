@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -25,6 +26,7 @@ import numpy as np
 
 PORT = int(os.environ.get("MEMLAB_EMBED_PORT", "8765"))
 IDLE = int(os.environ.get("MEMLAB_EMBED_IDLE", "1800"))
+PROTO = 2                        # bump when requests change: clients replace an older running process
 SLICE = 256                      # texts per request: long index builds stay under any HTTP timeout
 
 _models: dict[tuple, object] = {}
@@ -42,12 +44,33 @@ def _load(model: str, max_len: int | None):
     return m
 
 
+def _load_reranker(model: str):
+    """Cross-encoder for search_code's top 50 (H15). GPU only: on a CPU it costs seconds per query,
+    so without CUDA there is no reranker and search_code keeps its plain ranking."""
+    import torch
+    if not torch.cuda.is_available():
+        return None
+    from sentence_transformers import CrossEncoder
+    return CrossEncoder(model, max_length=512, device="cuda", model_kwargs={"torch_dtype": torch.float16})
+
+
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._reply({"ok": True, "pid": os.getpid(), "models": [k[0] for k in _models]})
+        self._reply({"ok": True, "proto": PROTO, "pid": os.getpid(), "models": [k[0] for k in _models]})
 
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "query" in req:                                    # rerank: score (query, text) pairs
+            key = ("rerank", req["model"])
+            with _lock:
+                if key not in _models:
+                    _models[key] = _load_reranker(req["model"])
+                m = _models[key]
+                s = None if m is None else m.predict([(req["query"], t) for t in req["texts"]],
+                                                     batch_size=16, show_progress_bar=False)
+            self.server.last = time.time()
+            self._reply({"scores": None if s is None else np.asarray(s, dtype=np.float32).tolist()})
+            return
         key = (req["model"], req.get("max_len"))
         with _lock:
             if key not in _models:
@@ -91,17 +114,32 @@ class Client:
     def __init__(self, model: str, max_len: int | None = None, port: int = PORT):
         self.model, self.max_len = model, max_len
         self.url = f"http://127.0.0.1:{port}"
+        self._checked = False
 
-    def _alive(self) -> bool:
+    def _health(self) -> dict | None:
         try:
             with urllib.request.urlopen(self.url, timeout=2) as r:
-                return json.loads(r.read())["ok"]
+                return json.loads(r.read())
         except (OSError, ValueError):
-            return False
+            return None
+
+    def _alive(self) -> bool:
+        h = self._health()
+        return bool(h and h.get("proto") == PROTO)
 
     def _start(self) -> None:
-        if self._alive():
+        h = self._health()
+        if h and h.get("proto") == PROTO:
             return
+        if h:                    # an older embedder that busy sessions keep from idling out: replace it
+            try:
+                os.kill(h["pid"], signal.SIGTERM)
+            except OSError:
+                pass
+            for _ in range(20):
+                if self._health() is None:
+                    break
+                time.sleep(0.5)
         repo = Path(__file__).resolve().parents[1]
         env = dict(os.environ, PYTHONPATH=str(repo), PYTHONIOENCODING="utf-8")
         flags = 0
@@ -122,20 +160,30 @@ class Client:
             time.sleep(0.5)
         raise RuntimeError(f"memlab embedder did not start on {self.url}")
 
-    def _post(self, texts: list[str], batch_size: int) -> np.ndarray:
-        body = json.dumps({"model": self.model, "max_len": self.max_len, "texts": texts,
-                           "batch_size": batch_size}).encode()
-        req = urllib.request.Request(self.url, body, {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            out = json.loads(r.read())
-        return np.frombuffer(base64.b64decode(out["data"]), dtype=np.float32).reshape(out["shape"])
+    def _request(self, payload: dict) -> dict:
+        if not self._checked:    # once per client: start the process, or replace an outdated one
+            self._start()
+            self._checked = True
+        body = json.dumps(payload).encode()
+        for attempt in (0, 1):
+            try:
+                req = urllib.request.Request(self.url, body, {"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=600) as r:
+                    return json.loads(r.read())
+            except urllib.error.URLError:            # not running yet, or exited while idle
+                if attempt:
+                    raise
+                self._start()
 
     def encode(self, texts: list[str], batch_size: int = 16, **_) -> np.ndarray:
         parts = []
         for i in range(0, len(texts), SLICE):
-            try:
-                parts.append(self._post(texts[i:i + SLICE], batch_size))
-            except urllib.error.URLError:            # not running yet, or exited while idle
-                self._start()
-                parts.append(self._post(texts[i:i + SLICE], batch_size))
+            out = self._request({"model": self.model, "max_len": self.max_len, "texts": texts[i:i + SLICE],
+                                 "batch_size": batch_size})
+            parts.append(np.frombuffer(base64.b64decode(out["data"]), dtype=np.float32).reshape(out["shape"]))
         return np.vstack(parts) if parts else np.zeros((0, 0), np.float32)
+
+    def rerank(self, query: str, texts: list[str]) -> np.ndarray | None:
+        """Cross-encoder scores for (query, text) pairs; None where the machine has no GPU."""
+        s = self._request({"model": self.model, "query": query, "texts": texts})["scores"]
+        return None if s is None else np.asarray(s, dtype=np.float32)
