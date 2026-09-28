@@ -16,6 +16,7 @@ import datetime
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import sys
 import threading
@@ -215,8 +216,13 @@ class Index:
 
 def serve(config: Path, root: Path) -> None:
     cfg = tomllib.loads(config.read_text(encoding="utf-8"))
+    # Read JSON-RPC from a private duplicate of stdin and point fd 0 at NUL before any work starts.
+    # On Windows a thread that touches the process stdin (a DLL loading, a child `git`) blocks
+    # while our main thread has a read pending on that pipe: the index never finished building.
+    stdin = os.fdopen(os.dup(0), "rb")
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    sys.stdin = open(os.devnull)
     index = Index(root.resolve(), cfg)
-    stdin = sys.stdin.buffer
     out = sys.stdout.buffer
 
     def send(msg: dict) -> None:
