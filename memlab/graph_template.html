@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -30,10 +30,10 @@ a { color:var(--accent); cursor:pointer; text-decoration:none; } a:hover { text-
 <div id="app">
   <div id="graph">
     <div id="bar">
-      <input id="q" placeholder="Поиск: файл или символ…" autocomplete="off">
-      <span class="chip" data-k="code">код</span>
-      <span class="chip" data-k="doc">документы</span>
-      <span class="chip" data-k="decision">решения</span>
+      <input id="q" placeholder="Search a file or symbol…" autocomplete="off">
+      <span class="chip" data-k="code">code</span>
+      <span class="chip" data-k="doc">docs</span>
+      <span class="chip" data-k="decision">decisions</span>
     </div>
     <div id="hits"></div>
   </div>
@@ -48,8 +48,10 @@ const GraphCls = graphology.Graph || graphology;
 const SigmaCls = Sigma.Sigma || Sigma.default || Sigma;
 const PALETTE = ["#4e79a7","#f28e2b","#59a14f","#e15759","#76b7b2","#edc948","#b07aa1","#ff9da7","#9c755f","#86bcb6","#d37295","#a0cbe8","#8cd17d","#f1ce63","#bab0ac"];
 const color = c => c < PALETTE.length ? PALETTE[c] : "#9b9a94";
-const KIND_LABEL = {code:"код", doc:"документ", decision:"решение"};
+const KIND_LABEL = {code:"code", doc:"doc", decision:"decision"};
 
+const DARK = matchMedia("(prefers-color-scheme: dark)").matches;
+const DIM = DARK ? "#2c2c2a" : "#e2e1dc";
 const g = new GraphCls({ multi:false, type:"undirected" });
 const byId = {};
 for (const n of DATA.nodes) {
@@ -68,10 +70,11 @@ const hidden = new Set();
 let selected = null, neigh = new Set();
 const renderer = new SigmaCls(g, document.getElementById("graph"), {
   renderEdgeLabels:false, labelRenderedSizeThreshold: 9, zIndex:true,
+  labelColor: { color: DARK ? "#ecebe6" : "#1d1d1b" },
   nodeReducer: (n, a) => {
     const r = { ...a };
     if (hidden.has(a.kind)) r.hidden = true;
-    if (selected && n !== selected && !neigh.has(n)) { r.color = "rgba(150,150,150,0.25)"; r.label = ""; }
+    if (selected && n !== selected && !neigh.has(n)) { r.color = DIM; r.label = ""; }
     if (n === selected) { r.highlighted = true; r.size = a.size * 1.6; }
     return r;
   },
@@ -80,6 +83,7 @@ const renderer = new SigmaCls(g, document.getElementById("graph"), {
     const [s, t] = g.extremities(e);
     if (hidden.has(g.getNodeAttribute(s, "kind")) || hidden.has(g.getNodeAttribute(t, "kind"))) r.hidden = true;
     if (selected) { if (s === selected || t === selected) r.color = "rgba(47,111,222,0.7)"; else r.hidden = true; }
+    else if (byId[s].c !== byId[t].c) r.hidden = true;   // cross-subsystem links only for the selected file
     return r;
   },
 });
@@ -91,18 +95,18 @@ function overview() {
   const comms = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 15);
   const kinds = {code:0, doc:0, decision:0}; for (const n of DATA.nodes) kinds[n.k]++;
   side.innerHTML = `<h1>${esc(TITLE)}</h1>
-    <div class="muted">${DATA.nodes.length} файлов, ${DATA.edges.length} связей · код ${kinds.code}, документы ${kinds.doc}, решения ${kinds.decision}</div>
-    <h2>Подсистемы</h2><ul style="list-style:none;padding:0">${comms.map(c =>
+    <div class="muted">${DATA.nodes.length} files, ${DATA.edges.length} links · code ${kinds.code}, docs ${kinds.doc}, decisions ${kinds.decision}</div>
+    <h2>Subsystems</h2><ul style="list-style:none;padding:0">${comms.map(c =>
       `<li><span class="sw" style="background:${color(+c)}"></span><a data-c="${c}">${esc(DATA.labels[c])}</a> <span class="muted">${counts[c]}</span></li>`).join("")}</ul>
-    <h2>Как пользоваться</h2><div class="muted">Клик по узлу — файл, его символы и связи. Поиск — по имени файла или символа. Кнопки сверху прячут код, документы или решения.</div>`;
+    <h2>How to use</h2><div class="muted">Click a node for its file, symbols and links. Search by file or symbol name. The chips on top hide code, docs or decisions.</div>`;
   side.querySelectorAll("a[data-c]").forEach(a => a.onclick = () => focusCommunity(+a.dataset.c));
 }
 function focusCommunity(c) {
   const ids = DATA.nodes.filter(n => n.c === c).map(n => n.id);
   selected = null; neigh = new Set(ids); renderer.refresh();
   const top = ids.sort((a, b) => byId[b].d - byId[a].d).slice(0, 30);
-  side.innerHTML = `<a id="back">← обзор</a><h1><span class="sw" style="background:${color(c)}"></span>${esc(DATA.labels[c])}</h1>
-    <div class="muted">${ids.length} файлов</div><h2>Главные файлы</h2><ul>${top.map(p => `<li><a class="mono" data-n="${esc(p)}">${esc(p)}</a></li>`).join("")}</ul>`;
+  side.innerHTML = `<a id="back">← overview</a><h1><span class="sw" style="background:${color(c)}"></span>${esc(DATA.labels[c])}</h1>
+    <div class="muted">${ids.length} files</div><h2>Main files</h2><ul>${top.map(p => `<li><a class="mono" data-n="${esc(p)}">${esc(p)}</a></li>`).join("")}</ul>`;
   wire();
 }
 function select(id) {
@@ -111,11 +115,11 @@ function select(id) {
   const rows = {code:[], doc:[], decision:[]};
   g.forEachEdge(id, (e, a, s, t) => { const o = s === id ? t : s; rows[byId[o].k].push([o, a]); });
   const list = k => rows[k].sort((x, y) => (y[1].refs + 2*y[1].imp) - (x[1].refs + 2*x[1].imp)).slice(0, 25)
-    .map(([o, a]) => `<li><a class="mono" data-n="${esc(o)}">${esc(o)}</a> <span class="muted">${a.imp ? "импорт/ссылка" : ""}${a.via ? " via " + esc(a.via) : ""}</span></li>`).join("");
-  side.innerHTML = `<a id="back">← обзор</a><h1 class="mono">${esc(id)}</h1>
-    <div class="muted"><span class="sw" style="background:${color(n.c)}"></span>${esc(DATA.labels[n.c])} · ${KIND_LABEL[n.k]} · ${n.l} строк · ${n.d} связей</div>
-    ${n.s.length ? `<h2>Символы</h2><div class="mono">${n.s.map(esc).join(", ")}</div>` : ""}
-    ${["decision","doc","code"].map(k => rows[k].length ? `<h2>${{code:"Код",doc:"Документы",decision:"Решения"}[k]} (${rows[k].length})</h2><ul>${list(k)}</ul>` : "").join("")}`;
+    .map(([o, a]) => `<li><a class="mono" data-n="${esc(o)}">${esc(o)}</a> <span class="muted">${a.imp ? "import/link" : ""}${a.via ? " via " + esc(a.via) : ""}</span></li>`).join("");
+  side.innerHTML = `<a id="back">← overview</a><h1 class="mono">${esc(id)}</h1>
+    <div class="muted"><span class="sw" style="background:${color(n.c)}"></span>${esc(DATA.labels[n.c])} · ${KIND_LABEL[n.k]} · ${n.l} lines · ${n.d} links</div>
+    ${n.s.length ? `<h2>Symbols</h2><div class="mono">${n.s.map(esc).join(", ")}</div>` : ""}
+    ${["decision","doc","code"].map(k => rows[k].length ? `<h2>${{code:"Code",doc:"Docs",decision:"Decisions"}[k]} (${rows[k].length})</h2><ul>${list(k)}</ul>` : "").join("")}`;
   wire();
   const d = renderer.getNodeDisplayData(id);
   if (d) renderer.getCamera().animate({ x:d.x, y:d.y, ratio: Math.min(renderer.getCamera().ratio, 0.35) }, { duration: 400 });
@@ -136,11 +140,13 @@ q.oninput = () => {
   if (s.length < 2) { hits.style.display = "none"; return; }
   const res = DATA.nodes.filter(n => n.id.toLowerCase().includes(s) || n.s.some(x => x.toLowerCase().includes(s)))
     .sort((a, b) => b.d - a.d).slice(0, 30);
-  hits.innerHTML = res.map(n => `<div data-n="${esc(n.id)}" class="mono">${esc(n.id)}</div>`).join("") || `<div class="muted">ничего</div>`;
+  hits.innerHTML = res.map(n => `<div data-n="${esc(n.id)}" class="mono">${esc(n.id)}</div>`).join("") || `<div class="muted">nothing found</div>`;
   hits.style.display = "block";
   hits.querySelectorAll("div[data-n]").forEach(d => d.onclick = () => { hits.style.display = "none"; select(d.dataset.n); });
 };
 overview();
+const deep = decodeURIComponent(location.hash.slice(1));   // graph.html#path/to/file opens its card
+if (deep && byId[deep]) select(deep);
 </script>
 </body>
 </html>
