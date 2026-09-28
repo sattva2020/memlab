@@ -1,0 +1,17 @@
+# Point memlab at a project: a git working tree plus a few corpus rules.
+root = "/path/to/your/repo"
+cache = ".cache"
+
+[corpus]
+max_bytes = 400000
+exclude = ["*.g.dart", "*.freezed.dart", "*package-lock.json", "node_modules/*"]
+# keep_always = ["notes/*"]          # untracked or ignored files that still belong to memory
+
+[graph]
+# dart_package = "your_package"      # resolves package:your_package/ imports
+# dart_root = "lib"
+# aliases = { "@/" = "src/" }        # TS path aliases
+
+[channels]
+# decision memory: ADRs, postmortems, session notes
+decisions = ["docs/adr/*", "docs/decisions/*"]

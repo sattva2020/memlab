@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ · memlab graph</title>
+<style>
+:root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e2dc; --accent:#2f6fde; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141413; --panel:#1f1f1d; --ink:#ecebe6; --muted:#9b9a94; --line:#33322f; --accent:#6ea0ff; } }
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+#app { display:grid; grid-template-columns: 1fr 360px; grid-template-rows: 100%; height:100%; }
+#graph { position:relative; height:100%; min-height:0; overflow:hidden; }
+#side { background:var(--panel); border-left:1px solid var(--line); overflow:auto; padding:14px 16px; }
+#bar { position:absolute; top:12px; left:12px; right:12px; display:flex; gap:8px; flex-wrap:wrap; z-index:2; }
+#q { flex:1; min-width:180px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); }
+.chip { padding:6px 10px; border:1px solid var(--line); border-radius:999px; background:var(--panel); cursor:pointer; user-select:none; }
+.chip.off { opacity:.4; }
+h1 { font-size:16px; margin:0 0 6px; } h2 { font-size:13px; margin:14px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+.muted { color:var(--muted); } .mono { font-family:ui-monospace,Consolas,monospace; font-size:12.5px; word-break:break-all; }
+ul { margin:0; padding-left:18px; } li { margin:2px 0; }
+a { color:var(--accent); cursor:pointer; text-decoration:none; } a:hover { text-decoration:underline; }
+.sw { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+#hits { position:absolute; top:52px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:8px; max-height:50vh; overflow:auto; display:none; min-width:320px; }
+#hits div { padding:6px 10px; cursor:pointer; } #hits div:hover { background:var(--line); }
+@media (max-width: 800px) { #app { grid-template-columns:1fr; grid-template-rows: 60vh auto; } #side { border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="graph">
+    <div id="bar">
+      <input id="q" placeholder="Поиск: файл или символ…" autocomplete="off">
+      <span class="chip" data-k="code">код</span>
+      <span class="chip" data-k="doc">документы</span>
+      <span class="chip" data-k="decision">решения</span>
+    </div>
+    <div id="hits"></div>
+  </div>
+  <aside id="side"></aside>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js" integrity="sha384-YdXPUVLFDJ3oITK7LFAPRyzkOcDK06bb7KRaE8GiQyGLsrvHaLS9Ej/lELMC7aCE" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/sigma@3.0.3/dist/sigma.min.js" integrity="sha384-2BM4IWUXdUSofkFc94Y1PY8U+cZYLJjB+EqQAoA2vfFGBvZK8aVaxEhICqCY4rlq" crossorigin="anonymous"></script>
+<script>
+const DATA = __DATA__;
+const TITLE = "__TITLE__";
+const GraphCls = graphology.Graph || graphology;
+const SigmaCls = Sigma.Sigma || Sigma.default || Sigma;
+const PALETTE = ["#4e79a7","#f28e2b","#59a14f","#e15759","#76b7b2","#edc948","#b07aa1","#ff9da7","#9c755f","#86bcb6","#d37295","#a0cbe8","#8cd17d","#f1ce63","#bab0ac"];
+const color = c => c < PALETTE.length ? PALETTE[c] : "#9b9a94";
+const KIND_LABEL = {code:"код", doc:"документ", decision:"решение"};
+
+const g = new GraphCls({ multi:false, type:"undirected" });
+const byId = {};
+for (const n of DATA.nodes) {
+  byId[n.id] = n;
+  g.addNode(n.id, { x:n.x, y:n.y, size: 2 + Math.sqrt(n.d) * 1.3, color: color(n.c),
+                    label: n.id.split("/").pop(), kind:n.k,
+                    type: "circle" });
+}
+for (const [u, v, imp, refs, via] of DATA.edges) {
+  if (g.hasEdge(u, v)) continue;
+  const same = byId[u].c === byId[v].c;
+  g.addEdge(u, v, { size: same ? Math.min(2, 0.4 + Math.log2(1 + refs) * 0.3) : 0.3,
+                    color: same ? color(byId[u].c) + "55" : "rgba(128,128,128,0.05)", imp, refs, via });
+}
+const hidden = new Set();
+let selected = null, neigh = new Set();
+const renderer = new SigmaCls(g, document.getElementById("graph"), {
+  renderEdgeLabels:false, labelRenderedSizeThreshold: 9, zIndex:true,
+  nodeReducer: (n, a) => {
+    const r = { ...a };
+    if (hidden.has(a.kind)) r.hidden = true;
+    if (selected && n !== selected && !neigh.has(n)) { r.color = "rgba(150,150,150,0.25)"; r.label = ""; }
+    if (n === selected) { r.highlighted = true; r.size = a.size * 1.6; }
+    return r;
+  },
+  edgeReducer: (e, a) => {
+    const r = { ...a };
+    const [s, t] = g.extremities(e);
+    if (hidden.has(g.getNodeAttribute(s, "kind")) || hidden.has(g.getNodeAttribute(t, "kind"))) r.hidden = true;
+    if (selected) { if (s === selected || t === selected) r.color = "rgba(47,111,222,0.7)"; else r.hidden = true; }
+    return r;
+  },
+});
+
+const side = document.getElementById("side");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function overview() {
+  const counts = {}; for (const n of DATA.nodes) counts[n.c] = (counts[n.c] || 0) + 1;
+  const comms = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 15);
+  const kinds = {code:0, doc:0, decision:0}; for (const n of DATA.nodes) kinds[n.k]++;
+  side.innerHTML = `<h1>${esc(TITLE)}</h1>
+    <div class="muted">${DATA.nodes.length} файлов, ${DATA.edges.length} связей · код ${kinds.code}, документы ${kinds.doc}, решения ${kinds.decision}</div>
+    <h2>Подсистемы</h2><ul style="list-style:none;padding:0">${comms.map(c =>
+      `<li><span class="sw" style="background:${color(+c)}"></span><a data-c="${c}">${esc(DATA.labels[c])}</a> <span class="muted">${counts[c]}</span></li>`).join("")}</ul>
+    <h2>Как пользоваться</h2><div class="muted">Клик по узлу — файл, его символы и связи. Поиск — по имени файла или символа. Кнопки сверху прячут код, документы или решения.</div>`;
+  side.querySelectorAll("a[data-c]").forEach(a => a.onclick = () => focusCommunity(+a.dataset.c));
+}
+function focusCommunity(c) {
+  const ids = DATA.nodes.filter(n => n.c === c).map(n => n.id);
+  selected = null; neigh = new Set(ids); renderer.refresh();
+  const top = ids.sort((a, b) => byId[b].d - byId[a].d).slice(0, 30);
+  side.innerHTML = `<a id="back">← обзор</a><h1><span class="sw" style="background:${color(c)}"></span>${esc(DATA.labels[c])}</h1>
+    <div class="muted">${ids.length} файлов</div><h2>Главные файлы</h2><ul>${top.map(p => `<li><a class="mono" data-n="${esc(p)}">${esc(p)}</a></li>`).join("")}</ul>`;
+  wire();
+}
+function select(id) {
+  selected = id; neigh = new Set(g.neighbors(id)); renderer.refresh();
+  const n = byId[id];
+  const rows = {code:[], doc:[], decision:[]};
+  g.forEachEdge(id, (e, a, s, t) => { const o = s === id ? t : s; rows[byId[o].k].push([o, a]); });
+  const list = k => rows[k].sort((x, y) => (y[1].refs + 2*y[1].imp) - (x[1].refs + 2*x[1].imp)).slice(0, 25)
+    .map(([o, a]) => `<li><a class="mono" data-n="${esc(o)}">${esc(o)}</a> <span class="muted">${a.imp ? "импорт/ссылка" : ""}${a.via ? " via " + esc(a.via) : ""}</span></li>`).join("");
+  side.innerHTML = `<a id="back">← обзор</a><h1 class="mono">${esc(id)}</h1>
+    <div class="muted"><span class="sw" style="background:${color(n.c)}"></span>${esc(DATA.labels[n.c])} · ${KIND_LABEL[n.k]} · ${n.l} строк · ${n.d} связей</div>
+    ${n.s.length ? `<h2>Символы</h2><div class="mono">${n.s.map(esc).join(", ")}</div>` : ""}
+    ${["decision","doc","code"].map(k => rows[k].length ? `<h2>${{code:"Код",doc:"Документы",decision:"Решения"}[k]} (${rows[k].length})</h2><ul>${list(k)}</ul>` : "").join("")}`;
+  wire();
+  const d = renderer.getNodeDisplayData(id);
+  if (d) renderer.getCamera().animate({ x:d.x, y:d.y, ratio: Math.min(renderer.getCamera().ratio, 0.35) }, { duration: 400 });
+}
+function wire() {
+  const b = document.getElementById("back"); if (b) b.onclick = () => { selected = null; neigh = new Set(); renderer.refresh(); overview(); };
+  side.querySelectorAll("a[data-n]").forEach(a => a.onclick = () => select(a.dataset.n));
+}
+renderer.on("clickNode", ({ node }) => select(node));
+renderer.on("clickStage", () => { selected = null; neigh = new Set(); renderer.refresh(); overview(); });
+
+document.querySelectorAll(".chip").forEach(ch => ch.onclick = () => {
+  const k = ch.dataset.k; hidden.has(k) ? hidden.delete(k) : hidden.add(k); ch.classList.toggle("off"); renderer.refresh();
+});
+const q = document.getElementById("q"), hits = document.getElementById("hits");
+q.oninput = () => {
+  const s = q.value.trim().toLowerCase();
+  if (s.length < 2) { hits.style.display = "none"; return; }
+  const res = DATA.nodes.filter(n => n.id.toLowerCase().includes(s) || n.s.some(x => x.toLowerCase().includes(s)))
+    .sort((a, b) => b.d - a.d).slice(0, 30);
+  hits.innerHTML = res.map(n => `<div data-n="${esc(n.id)}" class="mono">${esc(n.id)}</div>`).join("") || `<div class="muted">ничего</div>`;
+  hits.style.display = "block";
+  hits.querySelectorAll("div[data-n]").forEach(d => d.onclick = () => { hits.style.display = "none"; select(d.dataset.n); });
+};
+overview();
+</script>
+</body>
+</html>
