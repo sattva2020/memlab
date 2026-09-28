@@ -109,7 +109,7 @@ class Client:
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         for extra in ((0x01000000,) if os.name == "nt" else ()) + (0,):   # try CREATE_BREAKAWAY_FROM_JOB first
             try:
-                subprocess.Popen([sys.executable, "-m", "memlab", "embedder"], cwd=repo, env=env,
+                subprocess.Popen([sys.executable, "-m", "memlab", "embedder"], cwd=Path.home(), env=env,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, creationflags=flags | extra,
                                  start_new_session=os.name != "nt")

@@ -114,6 +114,9 @@ class Dense:
         self.reembedded = 0
         tag = f"-{hashlib.sha1(doc_prefix.encode()).hexdigest()[:6]}" if doc_prefix else ""
         tag += f"-L{max_len}" if max_len else ""
+        if not chunks:                           # e.g. a repository with no decision documents yet
+            self.emb = np.zeros((0, 0), np.float32)
+            return
         cache = cache_dir / f"emb-{fingerprint(chunks)}-{model.replace('/', '_')}{tag}.npy"
         if cache.exists():
             self.emb = np.load(cache)
@@ -139,6 +142,8 @@ class Dense:
         np.save(cache, self.emb)
 
     def scores(self, query: str) -> np.ndarray:
+        if not len(self.emb):
+            return np.zeros(0, np.float32)
         q = self.model.encode([self.query_prefix + query], normalize_embeddings=True)[0]
         return self.emb @ q
 

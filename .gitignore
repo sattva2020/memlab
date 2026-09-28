@@ -6,3 +6,5 @@ graphify-out/
 work/
 out/
 logs/
+build/
+*.egg-info/

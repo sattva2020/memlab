@@ -245,9 +245,9 @@ def cmd_gitcases(args):
 
 
 def _explore_ctx(args):
-    from . import explore, graph as graph_mod
-    cfg = tomllib.loads(Path(args.config).read_text(encoding="utf-8"))
+    from . import config, explore, graph as graph_mod
     root = Path(args.root).resolve()
+    cfg = config.load(root, args.config)
     c = cfg.get("corpus", {})
     chunks = corpus.build(root, c.get("include", []), c.get("exclude", []), c.get("max_bytes", 400_000),
                           c.get("keep_always", []))
@@ -264,10 +264,11 @@ def cmd_explore(args):
     elif args.action == "path":
         print(explore.path(G, g, chunks, args.names[0], args.names[1]))
     else:
-        out = Path(args.out or Path(__file__).resolve().parents[1] / "out" / Path(args.config).stem)
+        from . import config
+        name = Path(args.config).stem if args.config else Path(args.root).resolve().name
+        out = Path(args.out or config.home() / "out" / name)
         out.mkdir(parents=True, exist_ok=True)
         comm = explore.subsystems(G)
-        name = Path(args.config).stem
         if args.action in ("report", "all"):
             (out / "REPORT.md").write_text(explore.report(G, comm, name), encoding="utf-8")
         if args.action in ("html", "all"):
@@ -286,12 +287,12 @@ def cmd_hook(args):
     hook = (common if common.is_absolute() else root / common) / "hooks" / "post-commit"
     py = Path(sys.executable).as_posix()
     repo = Path(__file__).resolve().parents[1].as_posix()
-    cfg = Path(args.config).resolve().as_posix()
+    cfg = f' --config "{Path(args.config).resolve().as_posix()}"' if args.config else ""
     nl = chr(10)
     block = (nl + HOOK_MARK + nl +
              f'( top="$(git rev-parse --show-toplevel)"; export PYTHONPATH="{repo}" PYTHONIOENCODING=utf-8; '
-             f'"{py}" -m memlab explore all --config "{cfg}" --root "$top"; '
-             f'"{py}" -m memlab warm --config "{cfg}" --root "$top" ) >/dev/null 2>&1 &' + nl)
+             f'"{py}" -m memlab explore all{cfg} --root "$top"; '
+             f'"{py}" -m memlab warm{cfg} --root "$top" ) >/dev/null 2>&1 &' + nl)
     text = hook.read_text(encoding="utf-8") if hook.exists() else "#!/bin/sh" + nl
     if HOOK_MARK in text:
         print(f"already installed: {hook}")
@@ -306,33 +307,33 @@ def cmd_hook(args):
 
 def cmd_warm(args):
     """Build the server index once so the embedding stores hold every current chunk."""
-    from . import serve
-    cfg = tomllib.loads(Path(args.config).read_text(encoding="utf-8"))
-    serve.Index(Path(args.root).resolve(), cfg).wait()
+    from . import config, serve
+    root = Path(args.root).resolve()
+    serve.Index(root, config.load(root, args.config)).wait()
 
 
 def main():
     p = argparse.ArgumentParser(prog="memlab")
     sub = p.add_subparsers(dest="cmd", required=True)
     sv = sub.add_parser("serve", help="MCP server (stdio) with search_code and search_decisions")
-    sv.add_argument("--config", type=Path, required=True)
+    sv.add_argument("--config", type=Path, help="project config (default: built-in defaults + <root>/.memlab.toml)")
     sv.add_argument("--root", type=Path, default=Path("."), help="project working tree to index")
     sv.set_defaults(fn=lambda a: __import__("memlab.serve", fromlist=["serve"]).serve(a.config, a.root))
     ex = sub.add_parser("explore", help="graph views: html, report, explain NAME, path A B, all")
     ex.add_argument("action", choices=["html", "report", "explain", "path", "all"])
     ex.add_argument("names", nargs="*")
-    ex.add_argument("--config", type=Path, required=True)
+    ex.add_argument("--config", type=Path, help="project config (default: built-in defaults + <root>/.memlab.toml)")
     ex.add_argument("--root", type=Path, default=Path("."))
     ex.add_argument("--out", help="output dir for html/report (default out/<config name>)")
     ex.set_defaults(fn=cmd_explore)
     hk = sub.add_parser("hook-install", help="post-commit hook: rebuild graph views and warm the index")
-    hk.add_argument("--config", type=Path, required=True)
+    hk.add_argument("--config", type=Path, help="project config (default: built-in defaults + <root>/.memlab.toml)")
     hk.add_argument("--root", type=Path, default=Path("."))
     hk.set_defaults(fn=cmd_hook)
     em = sub.add_parser("embedder", help="shared embedding process (started by servers on demand)")
     em.set_defaults(fn=lambda a: __import__("memlab.embedder", fromlist=["run"]).run())
     wm = sub.add_parser("warm", help="build the search index once (embeds changed chunks)")
-    wm.add_argument("--config", type=Path, required=True)
+    wm.add_argument("--config", type=Path, help="project config (default: built-in defaults + <root>/.memlab.toml)")
     wm.add_argument("--root", type=Path, default=Path("."))
     wm.set_defaults(fn=cmd_warm)
     g = sub.add_parser("cases-from-git")

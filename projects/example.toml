@@ -1,17 +1,18 @@
-# Point memlab at a project: a git working tree plus a few corpus rules.
-root = "/path/to/your/repo"
-cache = ".cache"
+# Example .memlab.toml — put it at the repository root to override memlab's defaults.
+# Every section is optional; a section you write replaces that section's defaults key by key.
+# (Passed as `--config FILE` instead, this file replaces all defaults and must set `root`.)
 
 [corpus]
 max_bytes = 400000
-exclude = ["*.g.dart", "*.freezed.dart", "*package-lock.json", "node_modules/*"]
-# keep_always = ["notes/*"]          # untracked or ignored files that still belong to memory
+exclude = ["*.g.dart", "*.freezed.dart", "*package-lock.json", "node_modules/*", "vendor/*"]
+# keep_always = ["notes/*"]          # tracked files to index even when an exclude matches them
 
 [graph]
+# detected from pubspec.yaml / tsconfig.json when not set
 # dart_package = "your_package"      # resolves package:your_package/ imports
 # dart_root = "lib"
 # aliases = { "@/" = "src/" }        # TS path aliases
 
 [channels]
-# decision memory: ADRs, postmortems, session notes
+# decision memory: ADRs, postmortems, session notes (docs/notes/ is always included)
 decisions = ["docs/adr/*", "docs/decisions/*"]

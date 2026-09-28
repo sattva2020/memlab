@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memlab"
+version = "0.1.0"
+description = "Project memory for coding agents: an MCP server for code and decision retrieval over a symbol graph"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "scipy",
+  "networkx",
+  "sentence-transformers>=3",
+]
+
+[project.optional-dependencies]
+research = ["snowballstemmer"]   # --stem in eval (H12)
+test = ["pytest"]
+
+[project.scripts]
+memlab = "memlab.__main__:main"
+
+[tool.setuptools]
+packages = ["memlab"]
+
+[tool.setuptools.package-data]
+memlab = ["graph_template.html"]

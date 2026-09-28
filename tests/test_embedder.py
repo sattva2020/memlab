@@ -23,3 +23,9 @@ def test_client_round_trip_in_slices(monkeypatch):
         assert v.shape == (5, 2) and v[:, 0].tolist() == [1, 2, 3, 4, 1]
     finally:
         srv.shutdown()
+
+
+def test_dense_over_no_chunks_scores_nothing(tmp_path):
+    from memlab.retrieve import Dense
+    d = Dense([], "unused", tmp_path, encoder=Fake())
+    assert d.scores("anything").shape == (0,)

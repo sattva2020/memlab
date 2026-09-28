@@ -32,32 +32,37 @@ keeps ADRs and postmortems in their own channel, and draws the whole project as 
 ## Quick start
 
 ```bash
-git clone https://github.com/sattva2020/memlab && cd memlab
-pip install numpy scipy networkx sentence-transformers
-cp projects/example.toml projects/myrepo.toml      # set root, excludes, decision globs
-python -m memlab explore all --config projects/myrepo.toml --root /path/to/repo
-# -> out/myrepo/graph.html and out/myrepo/REPORT.md
+pip install git+https://github.com/sattva2020/memlab      # Python 3.11+
+cd /path/to/repo
+memlab explore all --root .        # -> ~/.memlab/out/<repo>/graph.html and REPORT.md
 ```
+
+For a GPU, install the CUDA build of PyTorch first (pip otherwise brings the CPU one); memlab
+uses CUDA when it is there and the CPU otherwise.
 
 Connect it to your agent — add to the repository's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "memlab": {
-      "type": "stdio",
-      "command": "python",
-      "args": ["-m", "memlab", "serve", "--config", "/abs/path/memlab/projects/myrepo.toml", "--root", "."],
-      "env": { "PYTHONPATH": "/abs/path/memlab" }
-    }
+    "memlab": { "type": "stdio", "command": "memlab", "args": ["serve", "--root", "."] }
   }
 }
 ```
 
+No config file is needed. memlab reads the Dart package from `pubspec.yaml` and import aliases
+from `tsconfig.json`, skips lockfiles and generated code, and treats `docs/adr/`,
+`docs/decisions/`, `docs/postmortems/` and `docs/notes/` as decision memory. To change any of
+that, put the section into `.memlab.toml` at the repository root (see `projects/example.toml`).
+
+The two embedding models are loaded once per machine, in a small background process on
+127.0.0.1 that every session shares and that exits after 30 idle minutes. Caches and the call
+journal (`logs/calls.jsonl`) live in `~/.memlab` (set `MEMLAB_HOME` to move them).
+
 Keep it fresh after every commit (runs in the background, never blocks a commit):
 
 ```bash
-python -m memlab hook-install --config projects/myrepo.toml --root /path/to/repo
+memlab hook-install --root /path/to/repo
 ```
 
 ## What you get

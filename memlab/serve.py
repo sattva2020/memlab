@@ -21,12 +21,11 @@ import re
 import sys
 import threading
 import time
-import tomllib
 from pathlib import Path
 
 import numpy as np
 
-from . import corpus, embedder, evaluate, explore, graph, retrieve
+from . import config, corpus, embedder, evaluate, explore, graph, retrieve
 
 E5 = "intfloat/multilingual-e5-small"
 QWEN = "Qwen/Qwen3-Embedding-0.6B"
@@ -75,7 +74,7 @@ TOOLS = [
 NOTES_DIR = "docs/notes"
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
-LOG = Path(os.environ.get("MEMLAB_LOG") or Path(__file__).resolve().parents[1] / "logs" / "calls.jsonl")
+LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
 _log_lock = threading.Lock()
 
 
@@ -126,8 +125,7 @@ class Index:
             self.is_dec = np.array([any(fnmatch.fnmatch(x.path, g) for g in globs) for x in self.chunks])
             self.is_code = np.array([Path(x.path).suffix.lower() in corpus.CODE_EXT for x in self.chunks])
             self.bm25 = retrieve.BM25([retrieve.tokenize(f"{x.path} {x.symbol} {x.text}") for x in self.chunks])
-            repo = Path(__file__).resolve().parents[1]
-            cache = repo / self.cfg.get("cache", ".cache")          # never inside the served project
+            cache = config.home() / self.cfg.get("cache", ".cache")  # never inside the served project
             self.dense = retrieve.Dense(self.chunks, E5, cache, query_prefix="query: ", doc_prefix="passage: ",
                                         encoder=embedder.Client(E5))
             gc = self.cfg.get("graph", {})
@@ -196,7 +194,8 @@ class Index:
         self.dec_ids = np.concatenate([self.dec_ids, np.arange(n, n + len(new))])
         vecs = self.dec_dense.model.encode([f"{c.path} {c.symbol}\n{c.text}" for c in new],
                                            normalize_embeddings=True)
-        self.dec_dense.emb = np.vstack([self.dec_dense.emb, vecs.astype(np.float32)])
+        old = self.dec_dense.emb
+        self.dec_dense.emb = np.vstack([old, vecs.astype(np.float32)]) if len(old) else vecs.astype(np.float32)
         return f"saved {rel} (searchable now; commit it with your change)"
 
     def explain(self, name: str) -> str:
@@ -235,15 +234,15 @@ class Index:
         return "\n\n".join(parts)
 
 
-def serve(config: Path, root: Path) -> None:
-    cfg = tomllib.loads(config.read_text(encoding="utf-8"))
+def serve(config_path: Path | None, root: Path) -> None:
+    cfg = config.load(root.resolve(), config_path)
     # Read JSON-RPC from a private duplicate of stdin and point fd 0 at NUL before any work starts.
     # On Windows a thread that touches the process stdin (a DLL loading, a child `git`) blocks
     # while our main thread has a read pending on that pipe: the index never finished building.
     stdin = os.fdopen(os.dup(0), "rb")
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
     sys.stdin = open(os.devnull)
-    journal("start", root=str(root.resolve()), config=str(config))
+    journal("start", root=str(root.resolve()), config=str(config_path) if config_path else None)
     index = Index(root.resolve(), cfg)
     out = sys.stdout.buffer
 
