@@ -93,18 +93,23 @@ class Dense:
     """Sentence-transformer embeddings, cached on disk per corpus fingerprint."""
 
     def __init__(self, chunks: list[Chunk], model: str, cache_dir: Path,
-                 query_prefix: str = "", doc_prefix: str = "", max_len: int | None = None):
+                 query_prefix: str = "", doc_prefix: str = "", max_len: int | None = None,
+                 encoder=None):
         """query_prefix/doc_prefix: instruction prefixes some models need (e5: "query: " /
         "passage: "; Qwen3: an instruction on the query only); the doc prefix and max_len are
-        part of the cache key. Uses CUDA in fp16 when available."""
+        part of the cache key. Uses CUDA in fp16 when available. `encoder`: anything with a
+        SentenceTransformer-style `.encode` (the shared embedder client); then no model is loaded here."""
         import hashlib
-        import torch
-        from sentence_transformers import SentenceTransformer
-        cuda = torch.cuda.is_available()
-        self.model = SentenceTransformer(model, device="cuda" if cuda else "cpu",
-                                         model_kwargs={"torch_dtype": torch.float16} if cuda else {})
-        if max_len:
-            self.model.max_seq_length = max_len
+        if encoder is not None:
+            self.model, cuda = encoder, True
+        else:
+            import torch
+            from sentence_transformers import SentenceTransformer
+            cuda = torch.cuda.is_available()
+            self.model = SentenceTransformer(model, device="cuda" if cuda else "cpu",
+                                             model_kwargs={"torch_dtype": torch.float16} if cuda else {})
+            if max_len:
+                self.model.max_seq_length = max_len
         self.query_prefix = query_prefix
         self.reembedded = 0
         tag = f"-{hashlib.sha1(doc_prefix.encode()).hexdigest()[:6]}" if doc_prefix else ""

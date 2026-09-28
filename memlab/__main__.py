@@ -329,6 +329,8 @@ def main():
     hk.add_argument("--config", type=Path, required=True)
     hk.add_argument("--root", type=Path, default=Path("."))
     hk.set_defaults(fn=cmd_hook)
+    em = sub.add_parser("embedder", help="shared embedding process (started by servers on demand)")
+    em.set_defaults(fn=lambda a: __import__("memlab.embedder", fromlist=["run"]).run())
     wm = sub.add_parser("warm", help="build the search index once (embeds changed chunks)")
     wm.add_argument("--config", type=Path, required=True)
     wm.add_argument("--root", type=Path, default=Path("."))

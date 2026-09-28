@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import corpus, evaluate, explore, graph, retrieve
+from . import corpus, embedder, evaluate, explore, graph, retrieve
 
 E5 = "intfloat/multilingual-e5-small"
 QWEN = "Qwen/Qwen3-Embedding-0.6B"
@@ -114,14 +114,16 @@ class Index:
             self.bm25 = retrieve.BM25([retrieve.tokenize(f"{x.path} {x.symbol} {x.text}") for x in self.chunks])
             repo = Path(__file__).resolve().parents[1]
             cache = repo / self.cfg.get("cache", ".cache")          # never inside the served project
-            self.dense = retrieve.Dense(self.chunks, E5, cache, query_prefix="query: ", doc_prefix="passage: ")
+            self.dense = retrieve.Dense(self.chunks, E5, cache, query_prefix="query: ", doc_prefix="passage: ",
+                                        encoder=embedder.Client(E5))
             gc = self.cfg.get("graph", {})
             self.graph = graph.Graph(self.chunks, gc.get("dart_package", ""), gc.get("dart_root", ""),
                                      aliases=gc.get("aliases", {}))
             self.dec_ids = np.flatnonzero(self.is_dec)
             dec_chunks = [self.chunks[i] for i in self.dec_ids]
             self.files = explore.file_graph(self.chunks, self.graph, globs)
-            self.dec_dense = retrieve.Dense(dec_chunks, QWEN, cache, query_prefix=QWEN_INSTRUCT, max_len=512)
+            self.dec_dense = retrieve.Dense(dec_chunks, QWEN, cache, query_prefix=QWEN_INSTRUCT, max_len=512,
+                                            encoder=embedder.Client(QWEN, max_len=512))
             log(f"index ready: {len(self.chunks)} chunks, {len(self.dec_ids)} decision chunks, "
                 f"re-embedded {self.dense.reembedded}+{self.dec_dense.reembedded}, {time.time() - t:.0f}s")
         except Exception as e:  # surfaced to the caller instead of a silent dead server
