@@ -15,12 +15,12 @@ def _repo(tmp_path, files):
 
 def test_defaults_detect_dart_ts_and_local_override(tmp_path):
     root = _repo(tmp_path, {
-        "flutter/pubspec.yaml": "name: ai_fitness_coach_360\nversion: 1.0.0\n",
+        "flutter/pubspec.yaml": "name: my_app\nversion: 1.0.0\n",
         "frontend/tsconfig.json": '{ // app\n "compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["./*"], "@lib/*": ["src/lib/*"],},}}',
         ".memlab.toml": '[channels]\ndecisions = ["notes/*"]\n',
     })
     cfg = config.load(root)
-    assert cfg["graph"]["dart_package"] == "ai_fitness_coach_360"
+    assert cfg["graph"]["dart_package"] == "my_app"
     assert cfg["graph"]["dart_root"] == "flutter/lib"
     assert cfg["graph"]["aliases"] == {"@/": "frontend/", "@lib/": "frontend/src/lib/"}
     assert cfg["channels"]["decisions"] == ["notes/*"]
