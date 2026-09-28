@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3B3FD8"></a>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-3B3FD8"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3B3FD8">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-8B5CF6">
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-8B5CF6">
@@ -152,4 +152,4 @@ out: [docs/RESEARCH.md](docs/RESEARCH.md). Related work: [docs/related-work.md](
 
 ## License
 
-MIT.
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
