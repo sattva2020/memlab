@@ -10,6 +10,7 @@ import fnmatch
 import json
 import re
 import sys
+import time
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -45,6 +46,8 @@ def cmd_stats(args):
 def cmd_eval(args):
     cfg, root, chunks = load(args.config)
     cases = json.loads(Path(args.cases or cfg["cases"]).read_text(encoding="utf-8"))
+    if args.lang:                        # H15: Russian = the query has a Cyrillic letter
+        cases = [k for k in cases if bool(re.search("[а-яё]", k["query"].lower())) == (args.lang == "ru")]
     paths = {c.path for c in chunks}
     missing = [(k["id"], g["path"]) for k in cases for g in k["gold"] if g["path"] not in paths]
     if missing:
@@ -106,6 +109,14 @@ def cmd_eval(args):
         ext[f"ext:{name}"] = json.loads(Path(path).read_text(encoding="utf-8"))
         methods.append(f"ext:{name}")
 
+    reranker = None
+    if any(m.startswith("rerank:") for m in methods):
+        import torch
+        from sentence_transformers import CrossEncoder
+        cuda = torch.cuda.is_available()
+        reranker = CrossEncoder(args.reranker, max_length=512, device="cuda" if cuda else "cpu",
+                                model_kwargs={"torch_dtype": torch.float16} if cuda else {})
+    rerank_seconds = []
     need_commits = any("commits=1" in m or m == "hybrid+c" or m.startswith("ptr:") for m in methods)
     code_paths = {c.path for c in chunks if Path(c.path).suffix.lower() in corpus.CODE_EXT}
     cch = commits.CommitChannel(root, chunks) if need_commits else None
@@ -165,6 +176,15 @@ def cmd_eval(args):
                 _, kk, cost, base = m.split(":", 3)
                 fs = {f: v for f, v in cch.file_scores(k["id"], q).items() if f in code_paths}
                 r[m] = ("ptr", sorted(fs, key=fs.get, reverse=True)[:int(kk)], r[base], int(cost))
+        for m in methods:
+            if m.startswith("rerank:"):  # rerank:<k>:<base> — H15, cross-encoder over the base's top k
+                _, kk, base = m.split(":", 2)
+                head = r[base][:int(kk)]
+                t0 = time.time()
+                s = reranker.predict([(q, f"{chunks[i].path} {chunks[i].symbol}\n{chunks[i].text}") for i in head],
+                                     batch_size=16, show_progress_bar=False)
+                rerank_seconds.append(time.time() - t0)
+                r[m] = np.concatenate([head[np.argsort(-np.asarray(s), kind="stable")], r[base][int(kk):]])
         for m, data in ext.items():
             r[m] = data[k["id"]]
         rankings[k["id"]] = r
@@ -180,6 +200,8 @@ def cmd_eval(args):
             return evaluate.select_channel(side, main, chunks, budget, share)
         return evaluate.select(rk, chunks, budget)
 
+    if rerank_seconds:
+        print(f"rerank: median {1000 * float(np.median(rerank_seconds)):.0f} ms per query, {len(cases)} queries")
     for m, on in gate_on.items():
         print(f"{m}: channel on for {on}/{len(cases)} queries")
     def add_oracles(scores):
@@ -359,6 +381,8 @@ def main():
                            help="drop a leading 'scope: ' from queries (leakage control)")
             s.add_argument("--external", action="append",
                            help="name=results.json from an external system (see tools/graphify_adapter.py)")
+            s.add_argument("--lang", choices=["ru", "en"], help="keep only Russian (Cyrillic) or English queries")
+            s.add_argument("--reranker", default="BAAI/bge-reranker-v2-m3", help="cross-encoder for rerank:<k>:<base>")
             s.add_argument("--out")
     args = p.parse_args()
     args.fn(args)
