@@ -144,7 +144,7 @@ class Client:
         env = dict(os.environ, PYTHONPATH=str(repo), PYTHONIOENCODING="utf-8")
         flags = 0
         if os.name == "nt":      # outlive the session that started it; no console window
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP   # not DETACHED_PROCESS: the venv python.exe launcher spawns the real python, which then opens its own visible console
         for extra in ((0x01000000,) if os.name == "nt" else ()) + (0,):   # try CREATE_BREAKAWAY_FROM_JOB first
             try:
                 subprocess.Popen([sys.executable, "-m", "memlab", "embedder"], cwd=Path.home(), env=env,
