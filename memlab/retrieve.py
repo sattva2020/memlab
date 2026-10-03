@@ -6,6 +6,7 @@ many of them fit into the context) is the evaluator's job, not the retriever's.
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -89,6 +90,21 @@ class BM25:
         return s
 
 
+def save_store(path: Path, new: dict[str, np.ndarray]) -> None:
+    """Add vectors to the shared per-model store. Servers of every project build at the same time:
+    re-read the file just before writing and replace it atomically, so one build does not drop
+    the vectors another one wrote since it loaded the store (that cost Cryonick a full re-embed)."""
+    store: dict[str, np.ndarray] = {}
+    if path.exists():
+        with np.load(path) as z:
+            store = dict(zip(z["keys"].tolist(), z["vecs"]))
+    store.update(new)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npz")
+    np.savez(tmp, keys=np.array(list(store)), vecs=np.stack(list(store.values())))
+    os.replace(tmp, path)       # ponytail: no lock, two writers in the same instant can still lose one batch
+
+
 class Dense:
     """Sentence-transformer embeddings, cached on disk per corpus fingerprint."""
 
@@ -127,16 +143,15 @@ class Dense:
         store_path = cache_dir / f"vecstore-{model.replace('/', '_')}{tag}.npz"
         store: dict[str, np.ndarray] = {}
         if store_path.exists():
-            z = np.load(store_path)
-            store = dict(zip(z["keys"].tolist(), z["vecs"]))
+            with np.load(store_path) as z:
+                store = dict(zip(z["keys"].tolist(), z["vecs"]))
         todo = [i for i, k in enumerate(keys) if k not in store]
         if todo:
             vecs = self.model.encode([texts[i] for i in todo], batch_size=16 if cuda else 64,
                                      normalize_embeddings=True, show_progress_bar=len(todo) > 500)
-            for i, v in zip(todo, vecs):
-                store[keys[i]] = v.astype(np.float32)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            np.savez(store_path, keys=np.array(list(store)), vecs=np.stack(list(store.values())))
+            new = {keys[i]: v.astype(np.float32) for i, v in zip(todo, vecs)}
+            store.update(new)
+            save_store(store_path, new)
         self.emb = np.stack([store[k] for k in keys]).astype(np.float32)
         self.reembedded = len(todo)
         np.save(cache, self.emb)
