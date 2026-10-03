@@ -75,6 +75,18 @@ TOOLS = [
 
 
 NOTES_DIR = "docs/notes"
+# Sent in `initialize`; MCP clients put it into the session's system prompt, so every project
+# that has the server connected gets the usage rules without a line in its CLAUDE.md.
+INSTRUCTIONS = (
+    "memlab is this project's memory: an index of the repository's code and of its decision records "
+    "(docs/adr, docs/notes, .ai-factory/patches). Use it before searching files by hand.\n"
+    "- Starting a task or entering an unfamiliar area: search_decisions for prior decisions, ADRs and "
+    "postmortems on the topic, and search_code to find the files and symbols (path:line); open sources "
+    "point-wise from there. explain NAME shows a symbol's or file's neighbours; find_path A B links two.\n"
+    "- Before stating a code fact from a result, read the source: the index is built from the working tree "
+    "when the server starts, so files changed later in the session are not in it.\n"
+    "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
+    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
 LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
@@ -288,7 +300,8 @@ def serve(config_path: Path | None, root: Path) -> None:
             if method == "initialize":
                 result = {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                           "capabilities": {"tools": {}},
-                          "serverInfo": {"name": "memlab", "version": "0.1.0"}}
+                          "serverInfo": {"name": "memlab", "version": "0.1.0"},
+                          "instructions": INSTRUCTIONS}
             elif method == "tools/list":
                 result = {"tools": TOOLS}
             elif method == "tools/call":
