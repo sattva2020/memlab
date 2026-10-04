@@ -4,7 +4,9 @@
                      PPR over df-capped symbol references with hubs blocked as transit →
                      code only → top 50 re-ordered by a multilingual cross-encoder (H15; GPU only).
   search_decisions — Qwen3 dense over decision memory (session notes, ADRs, postmortems);
-                     BM25 dropped: it buried paraphrased answers (H13).
+                     BM25 dropped: it buried paraphrased answers (H13). Opt-in per repo
+                     (`[decisions] jev = true` in .memlab.toml): TypeSafe Jev re-orders the top 10
+                     and says when no record answers (H16); any Jev failure keeps the dense order.
 
 Two tools instead of one shared ranking: every fixed or automatic split of one budget
 between code and decisions lost in the experiments (H3, H4, H7); the agent knows which kind
@@ -26,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config, corpus, embedder, evaluate, explore, graph, retrieve
+from . import config, corpus, embedder, evaluate, explore, graph, jev, retrieve
 
 E5 = "intfloat/multilingual-e5-small"
 QWEN = "Qwen/Qwen3-Embedding-0.6B"
@@ -155,6 +157,10 @@ class Index:
                 f"re-embedded {self.dense.reembedded}+{self.dec_dense.reembedded}, {time.time() - t:.0f}s")
             self.dense.scores("warm up")        # start the shared embedder and load both models now,
             self.dec_dense.scores("warm up")    # not inside the first tool call (was 41 s after an idle exit)
+            # Decision records leave the machine only when the repo opts in (H16, owner decision Q2).
+            self.jev_key = jev.api_key() if self.cfg.get("decisions", {}).get("jev") else None
+            if self.cfg.get("decisions", {}).get("jev") and not self.jev_key:
+                log(f"decisions.jev is on but no TYPESAFE_API_KEY (env or {jev.KEY_FILE}): dense order only")
             self.reranker = None if os.environ.get("MEMLAB_RERANK") == "0" else embedder.Client(RERANKER)
             if self.reranker and self.reranker.rerank("warm up", ["warm up"]) is None:
                 self.reranker = None            # no GPU: keep the plain ranking
@@ -195,17 +201,35 @@ class Index:
         c = self.chunks[i]
         return f"{c.path} {c.symbol}" + chr(10) + c.text
 
-    def search_decisions(self, query: str, k: int) -> str:
+    def search_decisions(self, query: str, k: int, judge: bool = True) -> str:
         self.wait()
         order = retrieve.rank(self.dec_dense.scores(query))                # dense only (H13)
+        n = max(k, jev.TOP) if judge and self.jev_key else k
         out, seen = [], set()
         for j in order:                                               # one best chunk per document
             c = self.chunks[self.dec_ids[j]]
             if c.path not in seen:
                 seen.add(c.path)
                 out.append(c)
-                if len(out) == k:
+                if len(out) == n:
                     break
+        if judge and self.jev_key and out:
+            head, t0 = out[:jev.TOP], time.time()
+            try:
+                nouls, tokens = jev.judge(query, [(c.path, c.text) for c in head], self.jev_key)
+            except Exception as e:                                    # never fail the search: dense order
+                journal("jev", root=str(self.root), status="fallback", ms=round(1000 * (time.time() - t0)),
+                        error=f"{type(e).__name__}: {e}"[:200])
+            else:
+                best = max(nouls)
+                journal("jev", root=str(self.root), status="ok", ms=round(1000 * (time.time() - t0)),
+                        tokens=tokens, best=round(best, 3))
+                out = [head[i] for i in sorted(range(len(head)), key=lambda i: -nouls[i])] + out[jev.TOP:]
+                if best < jev.NO_MATCH:
+                    near = "".join(f"\n- {c.path}:{c.line}" for c in out[:3])
+                    return (f"search_decisions: no recorded decision answers this question (best Jev match "
+                            f"{best:.2f} < {jev.NO_MATCH}). Closest records, not answers:{near}")
+        out = out[:k]
         return self._render(out, f"search_decisions: {len(out)} documents", max_chars=1600)
 
     def add_note(self, summary: str, body: str, kind: str, tags: list[str]) -> str:
@@ -227,7 +251,7 @@ class Index:
 
     def explain(self, name: str) -> str:
         self.wait()
-        heads = lambda q: chr(10).join(l for l in self.search_decisions(q, 3).splitlines() if l.startswith("### "))
+        heads = lambda q: chr(10).join(l for l in self.search_decisions(q, 3, judge=False).splitlines() if l.startswith("### "))
         return explore.explain(self.files, self.graph, self.chunks, name, decisions=heads)
 
     def find_path(self, a: str, b: str) -> str:

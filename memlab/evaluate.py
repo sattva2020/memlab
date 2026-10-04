@@ -48,7 +48,7 @@ def hit(gold: dict, picked: list[Chunk], level: str) -> bool:
 
 def recall(case: dict, picked: list[Chunk], level: str) -> float:
     g = case["gold"]
-    return sum(hit(x, picked, level) for x in g) / len(g)
+    return sum(hit(x, picked, level) for x in g) / max(len(g), 1)
 
 
 def interleave(ranking: np.ndarray, is_code: np.ndarray, n_code: int, n_docs: int) -> np.ndarray:
@@ -77,7 +77,7 @@ def files_in_order(ranking, chunks: list[Chunk], k: int) -> list[str]:
 
 def recall_files(case: dict, files: list[str]) -> float:
     s = set(files)
-    return sum(g["path"] in s for g in case["gold"]) / len(case["gold"])
+    return sum(g["path"] in s for g in case["gold"]) / max(len(case["gold"]), 1)
 
 
 def bootstrap_diff(a: np.ndarray, b: np.ndarray, n: int = 10000, seed: int = 0) -> tuple[float, float, float]:
