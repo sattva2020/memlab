@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import config
+
 PORT = int(os.environ.get("MEMLAB_EMBED_PORT", "8765"))
 IDLE = int(os.environ.get("MEMLAB_EMBED_IDLE", "1800"))
 PROTO = 2                        # bump when requests change: clients replace an older running process
@@ -145,12 +147,15 @@ class Client:
         flags = 0
         if os.name == "nt":      # outlive the session that started it; no console window
             flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP   # not DETACHED_PROCESS: the venv python.exe launcher spawns the real python, which then opens its own visible console
+        log = config.home() / "logs" / "embedder.log"    # why a start failed (busy port, CUDA, import)
+        log.parent.mkdir(parents=True, exist_ok=True)
         for extra in ((0x01000000,) if os.name == "nt" else ()) + (0,):   # try CREATE_BREAKAWAY_FROM_JOB first
             try:
-                subprocess.Popen([sys.executable, "-m", "memlab", "embedder"], cwd=Path.home(), env=env,
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, creationflags=flags | extra,
-                                 start_new_session=os.name != "nt")
+                with open(log, "ab") as err:
+                    subprocess.Popen([sys.executable, "-m", "memlab", "embedder"], cwd=Path.home(), env=env,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=err, creationflags=flags | extra,
+                                     start_new_session=os.name != "nt")
                 break
             except OSError:
                 continue

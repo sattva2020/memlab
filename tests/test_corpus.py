@@ -83,3 +83,11 @@ def test_stem_ru_only_cyrillic():
     assert tokenize("уведомления AdaptiveRepCounter", stem=True) == \
         ["уведомлен", "adaptive", "rep", "counter", "adaptiverepcounter"]
     assert query_tokens("почему не приходят уведомлений", True, True) == ["поч", "приход", "уведомлен"]
+
+
+def test_list_files_outside_git_walks_the_folder(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / ".hidden").mkdir(); (tmp_path / ".hidden" / "b.py").write_text("y = 2\n")
+    (tmp_path / "node_modules").mkdir(); (tmp_path / "node_modules" / "c.js").write_text("z\n")
+    from memlab.corpus import list_files
+    assert list_files(tmp_path, [], [], 400_000) == ["a.py"]

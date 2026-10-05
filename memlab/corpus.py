@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -102,13 +103,30 @@ def chunk_file(path: str, text: str) -> list[Chunk]:
     return chunks
 
 
+WALK_LIMIT = 20_000
+
+
+def _walk(root: Path) -> list[str]:
+    """Files of a folder that is not a git repo (the server starts in any session cwd).
+    Skips dot-folders and node_modules; stops at WALK_LIMIT so a home directory stays cheap."""
+    # ponytail: no .gitignore parsing outside git; git init the folder for exact listing
+    out = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x != "node_modules"]
+        rel = Path(d).relative_to(root).as_posix()
+        out += [f if rel == "." else f"{rel}/{f}" for f in files]
+        if len(out) >= WALK_LIMIT:
+            return out[:WALK_LIMIT]
+    return out
+
+
 def list_files(root: Path, include: list[str], exclude: list[str], max_bytes: int,
                keep_always: list[str] = ()) -> list[str]:
     """Text files git knows or would track (untracked but not ignored: a note written this
     session counts before its commit); `keep_always` globs override `exclude`."""
-    out = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
-                         capture_output=True,
-                         text=True, encoding="utf-8", check=True).stdout.splitlines()
+    git = subprocess.run(["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
+                         capture_output=True, text=True, encoding="utf-8")
+    out = git.stdout.splitlines() if git.returncode == 0 else _walk(root)
     keep = []
     for p in out:
         if Path(p).suffix.lower() not in CODE_EXT | MD_EXT | TEXT_EXT:
@@ -130,7 +148,7 @@ def build(root: Path, include: list[str], exclude: list[str], max_bytes: int,
     for p in list_files(root, include, exclude, max_bytes, keep_always):
         try:
             text = (root / p).read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        except (UnicodeDecodeError, OSError):    # OSError: deleted after listing (a warm during checkout)
             continue
         chunks += chunk_file(p, text)
     return chunks
