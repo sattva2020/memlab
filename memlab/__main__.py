@@ -302,7 +302,12 @@ HOOK_MARK = "# memlab: rebuild graph.html + REPORT.md and warm the search index 
 
 
 def cmd_hook(args):
-    """Append a background post-commit block to the repo's shared hooks dir (all worktrees)."""
+    """Append a background post-commit block to the repo's shared hooks dir (all worktrees);
+    with --claude, add the session hooks (memlab/hooks.py) to ~/.claude/settings.json instead."""
+    if args.claude:
+        from . import hooks
+        print(hooks.install())
+        return
     import subprocess
     root = Path(args.root).resolve()
     common = Path(subprocess.check_output(["git", "rev-parse", "--git-common-dir"], cwd=root, text=True).strip())
@@ -349,6 +354,8 @@ def main():
     ex.add_argument("--out", help="output dir for html/report (default out/<config name>)")
     ex.set_defaults(fn=cmd_explore)
     hk = sub.add_parser("hook-install", help="post-commit hook: rebuild graph views and warm the index")
+    hk.add_argument("--claude", action="store_true",
+                    help="instead: Claude Code SessionStart/UserPromptSubmit hooks in ~/.claude/settings.json")
     hk.add_argument("--config", type=Path, help="project config (default: built-in defaults + <root>/.memlab.toml)")
     hk.add_argument("--root", type=Path, default=Path("."))
     hk.set_defaults(fn=cmd_hook)

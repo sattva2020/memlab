@@ -84,7 +84,8 @@ INSTRUCTIONS = (
     "postmortems on the topic, and search_code to find the files and symbols (path:line); open sources "
     "point-wise from there. explain NAME shows a symbol's or file's neighbours; find_path A B links two.\n"
     "- Before stating a code fact from a result, read the source: the index is built from the working tree "
-    "when the server starts, so files changed later in the session are not in it.\n"
+    "when the server starts, so files changed later in the session are not in it (results from such files "
+    "are marked ⟨stale⟩ or ⟨deleted⟩).\n"
     "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
     "(one line summary + body with context and file paths) and commit the new docs/notes file with the change.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
@@ -128,11 +129,13 @@ class Index:
         self.root, self.cfg = root, cfg
         self.ready = threading.Event()
         self.error: str | None = None
+        self.built = time.time()     # files read after this; a newer mtime means the chunk may be out of date
+        self.fresh: set[str] = set()  # notes added through add_note: newer than the build, yet indexed
         threading.Thread(target=self._build, daemon=True).start()
 
     def _build(self) -> None:
         try:
-            t = time.time()
+            t = self.built = time.time()
             c = self.cfg.get("corpus", {})
             self.chunks = corpus.build(self.root, c.get("include", []), c.get("exclude", []),
                                        c.get("max_bytes", 400_000), c.get("keep_always", []))
@@ -213,6 +216,7 @@ class Index:
         the index picks it up at the next start)."""
         self.wait()
         rel = write_note(self.root, summary, body, kind, tags)
+        self.fresh.add(rel)
         new = corpus.chunk_file(rel, (self.root / rel).read_text(encoding="utf-8"))
         n = len(self.chunks)
         self.chunks = self.chunks + new
@@ -251,11 +255,18 @@ class Index:
                 out.append(int(s.argmax()))
         return out
 
-    @staticmethod
-    def _render(chunks: list[corpus.Chunk], header: str, max_chars: int | None = None) -> str:
+    def _mark(self, path: str) -> str:
+        """⟨deleted⟩ / ⟨stale⟩ when the file changed after the index read it: read it before relying on the chunk."""
+        try:
+            changed = (self.root / path).stat().st_mtime > self.built and path not in self.fresh
+        except OSError:
+            return "  ⟨deleted⟩"
+        return "  ⟨stale: file changed after indexing⟩" if changed else ""
+
+    def _render(self, chunks: list[corpus.Chunk], header: str, max_chars: int | None = None) -> str:
         parts = [header]
         for c in chunks:
-            title = f"{c.path}:{c.line}" + (f"  {c.symbol}" if c.symbol else "")
+            title = f"{c.path}:{c.line}" + (f"  {c.symbol}" if c.symbol else "") + self._mark(c.path)
             body = c.text if max_chars is None else c.text[:max_chars]
             parts.append(f"### {title}\n{body.rstrip()}")
         return "\n\n".join(parts)

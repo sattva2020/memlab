@@ -1,0 +1,187 @@
+"""Claude Code hooks: what reaches a session without a tool call.
+
+  session-start — newest decision records of the repo (a digest) and a warning when the
+                  last index build for it failed; prints nothing when there is neither.
+  prompt-hint   — one line pointing at memlab when a long task prompt arrives and the
+                  repo's server has had no tool call for a while; silent otherwise.
+
+Run as a file (`python <checkout>/memlab/hooks.py session-start`), standard library only:
+a hook starts on every session and prompt, the numpy import of the CLI is too slow for that.
+`install` merges both into ~/.claude/settings.json, replacing only its own entries.
+"""
+from __future__ import annotations
+
+import datetime
+import fnmatch
+import json
+import os
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+if __package__ in (None, ""):                     # run as a file by the hook command
+    sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
+from memlab import config  # noqa: E402
+
+LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
+STATE = LOG.parent / "hint-state.json"
+DIGEST_N = 5
+HINT_MIN_CHARS = int(os.environ.get("MEMLAB_HINT_MIN_CHARS", "200"))
+HINT_QUIET_MIN = int(os.environ.get("MEMLAB_HINT_QUIET_MIN", "15"))       # no memlab call for this long
+HINT_COOLDOWN_MIN = int(os.environ.get("MEMLAB_HINT_COOLDOWN_MIN", "10"))
+HINT = ("memlab: before working on this, call search_decisions and search_code on the topic "
+        "(prior decisions, path:line), then read the sources they point to.")
+
+
+def _git(root: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8",
+                       stdin=subprocess.DEVNULL)
+    return r.stdout if r.returncode == 0 else ""
+
+
+def roots(cwd: Path) -> list[str]:
+    """Roots a server for this session may have indexed: the cwd and, in a worktree, the main checkout."""
+    out = [os.path.normcase(str(cwd.absolute()))]
+    common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    if common:
+        main = os.path.normcase(str(Path(common).parent))
+        if main not in out:
+            out.append(main)
+    return out
+
+
+def log_tail(max_bytes: int = 512_000) -> list[dict]:
+    try:
+        with open(LOG, "rb") as f:
+            start = max(0, f.seek(0, 2) - max_bytes)
+            f.seek(start)
+            lines = f.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]   # cut line
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            continue
+    return out
+
+
+def _mine(events: list[dict], rs: list[str]) -> list[dict]:
+    return [e for e in events if os.path.normcase(e.get("root", "")) in rs]
+
+
+def decision_globs(root: Path) -> list[str]:
+    globs = list(config.DEFAULTS["channels"]["decisions"])
+    local = root / ".memlab.toml"
+    if local.exists():
+        globs = tomllib.loads(local.read_text(encoding="utf-8")).get("channels", {}).get("decisions", globs)
+    return globs + ["docs/notes/*"]
+
+
+def _summary(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
+    except OSError:
+        return ""
+    for ln in lines:
+        if ln.startswith("summary:"):
+            s = ln[8:].strip()
+            try:
+                return json.loads(s) if s.startswith('"') else s.strip("'")
+            except ValueError:
+                return s
+    return next((ln.lstrip("# ").strip() for ln in lines if ln.startswith("# ")), "")
+
+
+def digest(root: Path) -> list[str]:
+    """Newest DIGEST_N committed decision records: date, path, one-line summary."""
+    globs = decision_globs(root)
+    seen, out, date = set(), [], ""
+    for ln in _git(root, "log", "--format=@%cs", "--name-only", "--diff-filter=AM", "-n", "200").splitlines():
+        if ln.startswith("@"):
+            date = ln[1:]
+        elif ln and ln not in seen and any(fnmatch.fnmatch(ln, g) for g in globs) and (root / ln).is_file():
+            seen.add(ln)
+            out.append(f"- {date} {ln} — {_summary(root / ln)[:160]}")
+            if len(out) == DIGEST_N:
+                break
+    return out
+
+
+def session_start(data: dict) -> str:
+    cwd = Path(data.get("cwd") or os.getcwd())
+    top = _git(cwd, "rev-parse", "--show-toplevel").strip()
+    root = Path(top) if top else cwd
+    parts = []
+    lines = digest(root) if top else []
+    if lines:
+        parts.append("memlab — newest decision records here (search_decisions finds the rest):\n" + "\n".join(lines))
+    builds = [e for e in _mine(log_tail(), roots(root)) if e.get("event") in ("ready", "build_failed")]
+    if builds and builds[-1]["event"] == "build_failed":
+        parts.append(f"memlab warning: the last index build for this repo failed ({builds[-1]['ts']}): "
+                     f"{builds[-1].get('error', '')[:300].rstrip('.')}. memlab tools may answer with that error.")
+    return "\n\n".join(parts)
+
+
+def prompt_hint(data: dict, now: datetime.datetime | None = None) -> str:
+    prompt = data.get("prompt") or ""
+    if len(prompt) < HINT_MIN_CHARS or prompt.lstrip().startswith("/"):
+        return ""
+    now = now or datetime.datetime.now()
+    rs = roots(Path(data.get("cwd") or os.getcwd()))
+    calls = [e for e in _mine(log_tail(), rs) if e.get("event") == "call"]
+    if calls and now - datetime.datetime.fromisoformat(calls[-1]["ts"]) < datetime.timedelta(minutes=HINT_QUIET_MIN):
+        return ""
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    last = state.get(rs[0])
+    if last and now - datetime.datetime.fromisoformat(last) < datetime.timedelta(minutes=HINT_COOLDOWN_MIN):
+        return ""
+    state[rs[0]] = now.isoformat(timespec="seconds")
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+    return HINT
+
+
+def install(settings: Path | None = None) -> str:
+    """Add both hooks to the user's Claude Code settings; earlier memlab entries are replaced."""
+    settings = settings or Path.home() / ".claude" / "settings.json"
+    data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+    if settings.exists():
+        settings.with_suffix(".json.bak").write_text(settings.read_text(encoding="utf-8"), encoding="utf-8")
+    me = Path(__file__).absolute().as_posix()
+    hooks = data.setdefault("hooks", {})
+    for event, verb in (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt-hint")):
+        kept = [g for g in hooks.get(event, [])
+                if not any("memlab/hooks.py" in h.get("command", "") for h in g.get("hooks", []))]
+        kept.append({"hooks": [{"type": "command", "command": f'"{Path(sys.executable).as_posix()}" "{me}" {verb}',
+                                "timeout": 15}]})
+        hooks[event] = kept
+    settings.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return f"installed SessionStart + UserPromptSubmit hooks in {settings} (backup: settings.json.bak)"
+
+
+def main(argv: list[str]) -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    verb = argv[0] if argv else ""
+    if verb == "install":
+        print(install())
+        return
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+        text = {"session-start": session_start, "prompt-hint": prompt_hint}[verb](data)
+    except Exception:            # a hook must never get in the way of a session
+        return
+    if text:
+        print(text)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
