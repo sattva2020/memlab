@@ -292,7 +292,8 @@ def cmd_explore(args):
         out.mkdir(parents=True, exist_ok=True)
         comm = explore.subsystems(G)
         if args.action in ("report", "all"):
-            (out / "REPORT.md").write_text(explore.report(G, comm, name), encoding="utf-8")
+            (out / "REPORT.md").write_text(explore.report(
+                G, comm, name, missing=explore.missing_refs(G, chunks, Path(args.root).resolve())), encoding="utf-8")
         if args.action in ("html", "all"):
             (out / "graph.html").write_text(explore.to_html(G, comm, name), encoding="utf-8")
         print(f"{G.number_of_nodes()} files, {G.number_of_edges()} links, {len(set(comm.values()))} subsystems -> {out}")

@@ -4,10 +4,12 @@
                   last index build for it failed; prints nothing when there is neither.
   prompt-hint   — one line pointing at memlab when a long task prompt arrives and the
                   repo's server has had no tool call for a while; silent otherwise.
+  session-end   — usage log: for each memlab call of the session, which shown files the session
+                  edited afterwards (logs/usage.jsonl), a non-circular source of eval cases.
 
 Run as a file (`python <checkout>/memlab/hooks.py session-start`), standard library only:
 a hook starts on every session and prompt, the numpy import of the CLI is too slow for that.
-`install` merges both into ~/.claude/settings.json, replacing only its own entries.
+`install` merges all three into ~/.claude/settings.json, replacing only its own entries.
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from memlab import config  # noqa: E402
 
 LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
 STATE = LOG.parent / "hint-state.json"
+USAGE = LOG.parent / "usage.jsonl"
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 DIGEST_N = 5
 HINT_MIN_CHARS = int(os.environ.get("MEMLAB_HINT_MIN_CHARS", "200"))
 HINT_QUIET_MIN = int(os.environ.get("MEMLAB_HINT_QUIET_MIN", "15"))       # no memlab call for this long
@@ -150,6 +154,67 @@ def prompt_hint(data: dict, now: datetime.datetime | None = None) -> str:
     return HINT
 
 
+def _result_text(content) -> str:
+    if isinstance(content, list):
+        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return content if isinstance(content, str) else ""
+
+
+def usage(transcript: Path, root: Path) -> list[dict]:
+    """One record per memlab search in the transcript: the files it showed and those of them the
+    session edited after it (`used`). Edits made through Bash are not seen."""
+    # ponytail: Edit/Write tools only; sed or scripted edits would need a git diff per call
+    calls, results, edits = {}, {}, []                 # edits: (order, repo-relative path)
+    with open(transcript, encoding="utf-8", errors="replace") as f:
+        for n, ln in enumerate(f):
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            content = (e.get("message") or {}).get("content")
+            for it in content if isinstance(content, list) else []:
+                if not isinstance(it, dict):
+                    continue
+                if it.get("type") == "tool_use":
+                    name, args = it.get("name", ""), it.get("input") or {}
+                    if name.startswith("mcp__memlab__search_"):
+                        calls[it.get("id")] = (n, e.get("timestamp", ""), name.rsplit("__", 1)[-1], args.get("query", ""))
+                    elif name in EDIT_TOOLS and args.get("file_path"):
+                        try:
+                            rel = Path(args["file_path"]).absolute().relative_to(root).as_posix()
+                        except ValueError:
+                            continue                   # outside the repo
+                        edits.append((n, rel))
+                elif it.get("type") == "tool_result" and it.get("tool_use_id") in calls:
+                    results[it["tool_use_id"]] = _result_text(it.get("content"))
+    out = []
+    for cid, (n, ts, tool, query) in calls.items():
+        shown = list(dict.fromkeys(ln[4:].split(":")[0] for ln in results.get(cid, "").splitlines()
+                                   if ln.startswith("### ")))
+        later = {p for m, p in edits if m > n}
+        out.append({"ts": ts, "tool": tool, "query": query, "shown": shown,
+                    "used": [p for p in shown if p in later]})
+    return out
+
+
+def session_end(data: dict) -> str:
+    cwd = Path(data.get("cwd") or os.getcwd())
+    top = _git(cwd, "rev-parse", "--show-toplevel").strip()
+    path = data.get("transcript_path")
+    if not top or not path or not Path(path).exists():
+        return ""
+    recs = usage(Path(path), Path(top))
+    if recs:
+        try:
+            with open(USAGE, "a", encoding="utf-8") as f:
+                for r in recs:
+                    f.write(json.dumps({"session": data.get("session_id"), "root": top, **r},
+                                       ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return ""                                          # SessionEnd output is not shown anyway
+
+
 def install(settings: Path | None = None) -> str:
     """Add both hooks to the user's Claude Code settings; earlier memlab entries are replaced."""
     settings = settings or Path.home() / ".claude" / "settings.json"
@@ -158,14 +223,15 @@ def install(settings: Path | None = None) -> str:
         settings.with_suffix(".json.bak").write_text(settings.read_text(encoding="utf-8"), encoding="utf-8")
     me = Path(__file__).absolute().as_posix()
     hooks = data.setdefault("hooks", {})
-    for event, verb in (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt-hint")):
+    for event, verb in (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt-hint"),
+                        ("SessionEnd", "session-end")):
         kept = [g for g in hooks.get(event, [])
                 if not any("memlab/hooks.py" in h.get("command", "") for h in g.get("hooks", []))]
         kept.append({"hooks": [{"type": "command", "command": f'"{Path(sys.executable).as_posix()}" "{me}" {verb}',
                                 "timeout": 15}]})
         hooks[event] = kept
     settings.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return f"installed SessionStart + UserPromptSubmit hooks in {settings} (backup: settings.json.bak)"
+    return f"installed SessionStart + UserPromptSubmit + SessionEnd hooks in {settings} (backup: settings.json.bak)"
 
 
 def main(argv: list[str]) -> None:
@@ -176,7 +242,7 @@ def main(argv: list[str]) -> None:
         return
     try:
         data = json.loads(sys.stdin.read() or "{}")
-        text = {"session-start": session_start, "prompt-hint": prompt_hint}[verb](data)
+        text = {"session-start": session_start, "prompt-hint": prompt_hint, "session-end": session_end}[verb](data)
     except Exception:            # a hook must never get in the way of a session
         return
     if text:

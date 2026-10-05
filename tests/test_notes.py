@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from memlab.serve import note_root, write_note
+from memlab.serve import note_root, supersessions, write_note
 
 NOW = datetime.datetime(2026, 9, 28, 12, 0, 0)
 
@@ -34,3 +34,10 @@ def test_note_root_accepts_only_a_worktree_of_the_same_repo(tmp_path):
         note_root(main, str(other))
     with pytest.raises(ValueError):
         note_root(main, str(tmp_path / "missing"))
+
+
+def test_a_new_note_declares_what_it_supersedes(tmp_path):
+    old = write_note(tmp_path, "use X")
+    new = write_note(tmp_path, "use Y instead of X", supersedes=[old, r".\docs\adr\0001-x.md"])
+    assert supersessions(tmp_path, [old, new]) == {old: new, "docs/adr/0001-x.md": new}
+    assert "supersedes" not in (tmp_path / old).read_text(encoding="utf-8")

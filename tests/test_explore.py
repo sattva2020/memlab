@@ -1,5 +1,5 @@
 from memlab.corpus import Chunk
-from memlab.explore import explain, file_graph, path, plain_word, report, subsystems
+from memlab.explore import explain, file_graph, missing_refs, path, plain_word, report, subsystems
 from memlab.graph import Graph
 
 
@@ -29,3 +29,12 @@ def test_explain_path_report():
     assert "lib/a.dart:1" in text and "lib/b.dart" in text and "docs/adr/0001.md" in text
     assert "1 hops" in path(G, g, chunks, "Counter", "Screen")
     assert "# demo" in report(G, subsystems(G), "demo")
+
+
+def test_missing_refs_names_paths_a_decision_cites_that_are_gone(tmp_path):
+    chunks, g, _ = _setup()
+    chunks[4] = Chunk("n.md#note", "docs/adr/0001.md", "", "See lib/a.dart, a.dart, old/gone.dart, "
+                      "README.md, https://x.io/y.js and docs/adr/0001.md#why")
+    (tmp_path / "README.md").write_text("x")
+    G = file_graph(chunks, Graph(chunks, max_ref_df=10, max_defs=3), ["docs/adr/*"])
+    assert missing_refs(G, chunks, tmp_path) == [("docs/adr/0001.md", "old/gone.dart")]

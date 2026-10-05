@@ -49,10 +49,30 @@ def test_install_replaces_only_its_own_entries(tmp_path):
     assert len(json.loads(s.read_text())["hooks"]["UserPromptSubmit"]) == 1
 
 
+def test_usage_marks_shown_files_the_session_edited_afterwards(tmp_path):
+    def line(kind, item):
+        return json.dumps({"type": kind, "timestamp": "t", "message": {"content": [item]}})
+    edit = lambda p: line("assistant", {"type": "tool_use", "id": "e", "name": "Edit",
+                                        "input": {"file_path": str(tmp_path / p)}})
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join([
+        edit("a.py"),                                                   # before the search: not "used"
+        line("assistant", {"type": "tool_use", "id": "s1", "name": "mcp__memlab__search_code",
+                           "input": {"query": "q"}}),
+        line("user", {"type": "tool_result", "tool_use_id": "s1", "content": [
+            {"type": "text", "text": "search_code: 2\n\n### a.py:1  f\nx\n\n### b.py:3  ⟨stale⟩\ny"}]}),
+        edit("b.py"), edit("c.py"),
+        line("assistant", {"type": "tool_use", "id": "w", "name": "Write",
+                           "input": {"file_path": "C:/elsewhere/b.py"}}),
+    ]), encoding="utf-8")
+    assert hooks.usage(t, tmp_path) == [
+        {"ts": "t", "tool": "search_code", "query": "q", "shown": ["a.py", "b.py"], "used": ["b.py"]}]
+
+
 def test_results_from_files_changed_after_indexing_are_marked(tmp_path):
     idx = object.__new__(serve.Index)
-    idx.root, idx.built, idx.fresh = tmp_path, time.time() - 10, {"new.md"}
+    idx.root, idx.built, idx.fresh, idx.superseded = tmp_path, time.time() - 10, {"new.md"}, {"old.py": "n.md"}
     (tmp_path / "old.py").write_text("x"); os.utime(tmp_path / "old.py", (idx.built - 5, idx.built - 5))
     (tmp_path / "edited.py").write_text("y"); (tmp_path / "new.md").write_text("z")
-    assert idx._mark("old.py") == "" and idx._mark("new.md") == ""
+    assert idx._mark("old.py") == "  ⟨superseded by n.md⟩" and idx._mark("new.md") == ""
     assert "stale" in idx._mark("edited.py") and "deleted" in idx._mark("gone.py")

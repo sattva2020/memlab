@@ -61,6 +61,9 @@ TOOLS = [
          "body": {"type": "string", "description": "details: context, alternatives, file paths"},
          "type": {"type": "string", "enum": ["decision", "note", "postmortem"]},
          "tags": {"type": "array", "items": {"type": "string"}},
+         "supersedes": {"type": "array", "items": {"type": "string"}, "description": (
+             "repo-relative paths of earlier decision records this one replaces; they stay searchable, "
+             "marked superseded and ranked after current ones")},
          "root": {"type": "string", "description": ("absolute path of the git worktree you work in, when it "
                   "differs from the server's root (e.g. a desktop-app worktree session); default: server root")}},
          "required": ["summary"]}},
@@ -90,7 +93,8 @@ INSTRUCTIONS = (
     "when the server starts, so files changed later in the session are not in it (results from such files "
     "are marked ⟨stale⟩ or ⟨deleted⟩).\n"
     "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
-    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change. "
+    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change; "
+    "when it replaces an earlier decision from search_decisions, list that file in supersedes. "
     "If you work in a git worktree other than the server's root, pass it as add_note root.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
@@ -109,19 +113,42 @@ def journal(event: str, **fields) -> None:
 
 
 def write_note(root: Path, summary: str, body: str = "", kind: str = "decision",
-               tags: list[str] | None = None, now: datetime.datetime | None = None) -> str:
+               tags: list[str] | None = None, now: datetime.datetime | None = None,
+               supersedes: list[str] | None = None) -> str:
     """A new note file, one per call: date + slug + content hash, created exclusively."""
     now = now or datetime.datetime.now()
     slug = "-".join(re.findall(r"[^\W_]+", summary.lower()))[:60].strip("-") or "note"
     text = (f"---\ntype: {kind}\ncreated: '{now.isoformat(timespec='seconds')}'\n"
             f"tags: {json.dumps(tags or [], ensure_ascii=False)}\n"
-            f"summary: {json.dumps(summary, ensure_ascii=False)}\n---\n# {summary}\n\n{body}".rstrip() + "\n")
+            + (f"supersedes: {json.dumps(supersedes, ensure_ascii=False)}\n" if supersedes else "")
+            + f"summary: {json.dumps(summary, ensure_ascii=False)}\n---\n# {summary}\n\n{body}".rstrip() + "\n")
     h = hashlib.sha1(text.encode()).hexdigest()[:8]
     rel = f"{NOTES_DIR}/{now:%Y-%m-%d}-{slug}-{h}.md"
     (root / NOTES_DIR).mkdir(parents=True, exist_ok=True)
     with open(root / rel, "x", encoding="utf-8", newline="\n") as f:
         f.write(text)
     return rel
+
+
+def supersessions(root: Path, paths) -> dict[str, str]:
+    """{old record: the record whose frontmatter `supersedes:` lists it}. Notes are append-only,
+    so the replacement is declared by the new record, never written into the old one."""
+    out = {}
+    for p in paths:
+        try:
+            with open(root / p, encoding="utf-8", errors="replace") as f:
+                head = [next(f, "") for _ in range(12)]
+        except OSError:
+            continue
+        for ln in head:
+            if ln.startswith("supersedes:"):
+                try:
+                    olds = json.loads(ln[11:])
+                except ValueError:
+                    olds = []
+                for old in olds if isinstance(olds, list) else []:
+                    out[str(old).replace("\\", "/").removeprefix("./")] = p
+    return out
 
 
 def note_root(root: Path, target: str | None) -> Path:
@@ -149,6 +176,7 @@ class Index:
         self.error: str | None = None
         self.built = time.time()     # files read after this; a newer mtime means the chunk may be out of date
         self.fresh: set[str] = set()  # notes added through add_note: newer than the build, yet indexed
+        self.superseded: dict[str, str] = {}
         threading.Thread(target=self._build, daemon=True).start()
 
     def _build(self) -> None:
@@ -169,6 +197,7 @@ class Index:
                                      aliases=gc.get("aliases", {}))
             self.dec_ids = np.flatnonzero(self.is_dec)
             dec_chunks = [self.chunks[i] for i in self.dec_ids]
+            self.superseded = supersessions(self.root, dict.fromkeys(c.path for c in dec_chunks))
             self.files = explore.file_graph(self.chunks, self.graph, globs)
             self.dec_dense = retrieve.Dense(dec_chunks, QWEN, cache, query_prefix=QWEN_INSTRUCT, max_len=512,
                                             encoder=embedder.Client(QWEN, max_len=512))
@@ -227,15 +256,18 @@ class Index:
                 out.append(c)
                 if len(out) == k:
                     break
+        out.sort(key=lambda c: c.path in self.superseded)              # stable: superseded go last
         return self._render(out, f"search_decisions: {len(out)} documents", max_chars=1600)
 
-    def add_note(self, summary: str, body: str, kind: str, tags: list[str], target: str | None = None) -> str:
+    def add_note(self, summary: str, body: str, kind: str, tags: list[str], target: str | None = None,
+                 supersedes: list[str] | None = None) -> str:
         """Write the note and make it searchable at once (decision channel only; the rest of
         the index picks it up at the next start)."""
         self.wait()
         dest = note_root(self.root, target)
-        rel = write_note(dest, summary, body, kind, tags)
+        rel = write_note(dest, summary, body, kind, tags, supersedes=supersedes)
         self.fresh.add(rel)
+        self.superseded.update(supersessions(dest, [rel]))
         new = corpus.chunk_file(rel, (dest / rel).read_text(encoding="utf-8"))
         n = len(self.chunks)
         self.chunks = self.chunks + new
@@ -280,7 +312,8 @@ class Index:
             changed = (self.root / path).stat().st_mtime > self.built and path not in self.fresh
         except OSError:
             return "  ⟨deleted⟩"
-        return "  ⟨stale: file changed after indexing⟩" if changed else ""
+        mark = f"  ⟨superseded by {self.superseded[path]}⟩" if path in self.superseded else ""
+        return mark + ("  ⟨stale: file changed after indexing⟩" if changed else "")
 
     def _render(self, chunks: list[corpus.Chunk], header: str, max_chars: int | None = None) -> str:
         parts = [header]
@@ -343,7 +376,7 @@ def serve(config_path: Path | None, root: Path) -> None:
                     text = index.search_decisions(a["query"], min(int(a.get("k", 5)), 15))
                 elif name == "add_note":
                     text = index.add_note(a["summary"], a.get("body", ""), a.get("type", "decision"),
-                                          a.get("tags") or [], a.get("root"))
+                                          a.get("tags") or [], a.get("root"), a.get("supersedes") or None)
                 elif name == "explain":
                     text = index.explain(a["name"])
                 elif name == "find_path":

@@ -11,12 +11,13 @@ import fnmatch
 import html
 import json
 import posixpath
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import networkx as nx
 
-from .corpus import CODE_EXT, Chunk
+from .corpus import CODE_EXT, MD_EXT, TEXT_EXT, Chunk
 from .graph import Graph
 
 GENERATED = ("*.g.dart", "*.freezed.dart", "*.gen.dart", "*.min.js")
@@ -160,7 +161,30 @@ def path(G, graph, chunks, a: str, b: str) -> str:
     return f"path {a} -> {b}: {len(best) - 1} hops\n" + "\n".join(hops)
 
 
-def report(G: nx.Graph, comm: dict[str, int], project: str, top: int = 15) -> str:
+PATH_REF = re.compile(r"(?<![\w@./:-])[\w@.-]+(?:/[\w@.-]+)+")   # not inside a URL
+
+
+def missing_refs(G: nx.Graph, chunks: list[Chunk], root: Path) -> list[tuple[str, str]]:
+    """(decision record, path it names) for paths that no longer exist: decisions that drifted
+    from the code. A path counts as present when it exists under root or ends an indexed file's path
+    (records often name `lib/x.dart` for `app/lib/x.dart`)."""
+    exts = CODE_EXT | MD_EXT | TEXT_EXT
+    files = list(G)
+    out = set()
+    for c in chunks:
+        if c.path not in G or G.nodes[c.path]["kind"] != "decision":
+            continue
+        for ref in PATH_REF.findall(c.text):
+            ref = ref.split("#")[0].rstrip(".").removeprefix("./")   # keep `.ai-factory/...`
+            if ref.startswith("/") or Path(ref).suffix.lower() not in exts or (root / ref).exists():
+                continue
+            if not any(f == ref or f.endswith("/" + ref) for f in files):
+                out.add((c.path, ref))
+    return sorted(out)
+
+
+def report(G: nx.Graph, comm: dict[str, int], project: str, top: int = 15,
+           missing: list[tuple[str, str]] = ()) -> str:
     gen = lambda p: any(fnmatch.fnmatch(p, g) for g in GENERATED)
     members = defaultdict(list)
     for p, c in comm.items():
@@ -186,6 +210,8 @@ def report(G: nx.Graph, comm: dict[str, int], project: str, top: int = 15) -> st
     undoc = [p for p in hubs if not any(G.nodes[n]["kind"] != "code" for n in G[p])]
     out += ["", "## Hubs no document or decision links to", ""]
     out += [f"- `{p}`" for p in undoc] or ["- none"]
+    out += ["", "## Decision records naming files that no longer exist", ""]
+    out += [f"- `{d}` → `{ref}`" for d, ref in missing] or ["- none"]
     return "\n".join(out) + "\n"
 
 
