@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -59,7 +60,9 @@ TOOLS = [
          "summary": {"type": "string", "description": "one line: what was decided and why"},
          "body": {"type": "string", "description": "details: context, alternatives, file paths"},
          "type": {"type": "string", "enum": ["decision", "note", "postmortem"]},
-         "tags": {"type": "array", "items": {"type": "string"}}},
+         "tags": {"type": "array", "items": {"type": "string"}},
+         "root": {"type": "string", "description": ("absolute path of the git worktree you work in, when it "
+                  "differs from the server's root (e.g. a desktop-app worktree session); default: server root")}},
          "required": ["summary"]}},
     {"name": "explain",
      "description": ("Explain a symbol or file: where it is defined, which files use it and what it uses, "
@@ -87,7 +90,8 @@ INSTRUCTIONS = (
     "when the server starts, so files changed later in the session are not in it (results from such files "
     "are marked ⟨stale⟩ or ⟨deleted⟩).\n"
     "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
-    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change.")
+    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change. "
+    "If you work in a git worktree other than the server's root, pass it as add_note root.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
 LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
@@ -118,6 +122,20 @@ def write_note(root: Path, summary: str, body: str = "", kind: str = "decision",
     with open(root / rel, "x", encoding="utf-8", newline="\n") as f:
         f.write(text)
     return rel
+
+
+def note_root(root: Path, target: str | None) -> Path:
+    """Where add_note writes: the server root, or a worktree of the same repository. The desktop app
+    starts the server in the main checkout while the session works in a worktree, and its roots/list
+    answers with the same main checkout, so the agent names the worktree itself."""
+    if not target:
+        return root
+    t = Path(target).resolve()
+    common = lambda p: subprocess.run(["git", "-C", str(p), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                      capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+    if not t.is_dir() or not common(t) or Path(common(t)).resolve() != Path(common(root)).resolve():
+        raise ValueError(f"root {target} is not a worktree of {root}")
+    return t
 
 
 def log(msg: str) -> None:
@@ -211,13 +229,14 @@ class Index:
                     break
         return self._render(out, f"search_decisions: {len(out)} documents", max_chars=1600)
 
-    def add_note(self, summary: str, body: str, kind: str, tags: list[str]) -> str:
+    def add_note(self, summary: str, body: str, kind: str, tags: list[str], target: str | None = None) -> str:
         """Write the note and make it searchable at once (decision channel only; the rest of
         the index picks it up at the next start)."""
         self.wait()
-        rel = write_note(self.root, summary, body, kind, tags)
+        dest = note_root(self.root, target)
+        rel = write_note(dest, summary, body, kind, tags)
         self.fresh.add(rel)
-        new = corpus.chunk_file(rel, (self.root / rel).read_text(encoding="utf-8"))
+        new = corpus.chunk_file(rel, (dest / rel).read_text(encoding="utf-8"))
         n = len(self.chunks)
         self.chunks = self.chunks + new
         self.is_dec = np.concatenate([self.is_dec, np.ones(len(new), bool)])
@@ -227,7 +246,7 @@ class Index:
                                            normalize_embeddings=True)
         old = self.dec_dense.emb
         self.dec_dense.emb = np.vstack([old, vecs.astype(np.float32)]) if len(old) else vecs.astype(np.float32)
-        return f"saved {rel} (searchable now; commit it with your change)"
+        return f"saved {dest / rel} (searchable now; commit it with your change)"
 
     def explain(self, name: str) -> str:
         self.wait()
@@ -324,7 +343,7 @@ def serve(config_path: Path | None, root: Path) -> None:
                     text = index.search_decisions(a["query"], min(int(a.get("k", 5)), 15))
                 elif name == "add_note":
                     text = index.add_note(a["summary"], a.get("body", ""), a.get("type", "decision"),
-                                          a.get("tags") or [])
+                                          a.get("tags") or [], a.get("root"))
                 elif name == "explain":
                     text = index.explain(a["name"])
                 elif name == "find_path":

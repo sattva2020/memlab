@@ -1,6 +1,9 @@
 import datetime
+import subprocess
 
-from memlab.serve import write_note
+import pytest
+
+from memlab.serve import note_root, write_note
 
 NOW = datetime.datetime(2026, 9, 28, 12, 0, 0)
 
@@ -16,3 +19,18 @@ def test_different_notes_never_collide(tmp_path):
     a = write_note(tmp_path, "same title", "one", now=NOW)
     b = write_note(tmp_path, "same title", "two", now=NOW)
     assert a != b
+
+
+def test_note_root_accepts_only_a_worktree_of_the_same_repo(tmp_path):
+    git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)
+    main, wt, other = tmp_path / "main", tmp_path / "wt", tmp_path / "other"
+    for r in (main, other):
+        git("init", "-q", str(r))
+        git("-C", str(r), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+    git("-C", str(main), "worktree", "add", "-q", str(wt))
+    assert note_root(main, None) == main
+    assert note_root(main, str(wt)) == wt.resolve()
+    with pytest.raises(ValueError):
+        note_root(main, str(other))
+    with pytest.raises(ValueError):
+        note_root(main, str(tmp_path / "missing"))
