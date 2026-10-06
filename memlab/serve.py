@@ -36,6 +36,10 @@ RERANK_TOP = 50
 QWEN_INSTRUCT = ("Instruct: Given a question about a software project, retrieve the notes, "
                  "decision records and postmortems that answer it\nQuery: ")
 
+ROOT = {"type": "string", "description": (
+    "absolute path of the git worktree you work in, when it differs from the server's root (e.g. a "
+    "desktop-app worktree session); the first call builds that worktree's index. Default: server root")}
+
 TOOLS = [
     {"name": "search_code",
      "description": ("Find the code in this repository relevant to a task or question: files, "
@@ -43,14 +47,16 @@ TOOLS = [
                      "'what calls Y', 'which files does this change touch'."),
      "inputSchema": {"type": "object", "properties": {
          "query": {"type": "string", "description": "the task or question, any language"},
-         "budget_tokens": {"type": "integer", "description": "context to return (default 6000, max 20000)"}},
+         "budget_tokens": {"type": "integer", "description": "context to return (default 6000, max 20000)"},
+         "root": ROOT},
          "required": ["query"]}},
     {"name": "search_decisions",
      "description": ("Find past decisions, session notes, ADRs and postmortems about this project: "
                      "why something was done, what was decided, what broke and how it was fixed."),
      "inputSchema": {"type": "object", "properties": {
          "query": {"type": "string"},
-         "k": {"type": "integer", "description": "documents to return (default 5, max 15)"}},
+         "k": {"type": "integer", "description": "documents to return (default 5, max 15)"},
+         "root": ROOT},
          "required": ["query"]}},
     {"name": "add_note",
      "description": ("Record a decision, conclusion or postmortem so later sessions find it with "
@@ -64,19 +70,19 @@ TOOLS = [
          "supersedes": {"type": "array", "items": {"type": "string"}, "description": (
              "repo-relative paths of earlier decision records this one replaces; they stay searchable, "
              "marked superseded and ranked after current ones")},
-         "root": {"type": "string", "description": ("absolute path of the git worktree you work in, when it "
-                  "differs from the server's root (e.g. a desktop-app worktree session); default: server root")}},
+         "root": ROOT},
          "required": ["summary"]}},
     {"name": "explain",
      "description": ("Explain a symbol or file: where it is defined, which files use it and what it uses, "
                      "its code/doc/decision neighbours in the project graph, and related decisions."),
      "inputSchema": {"type": "object", "properties": {
-         "name": {"type": "string", "description": "symbol (class/function) name, file path or file name"}},
+         "name": {"type": "string", "description": "symbol (class/function) name, file path or file name"},
+         "root": ROOT},
          "required": ["name"]}},
     {"name": "find_path",
      "description": "Shortest chain of imports/symbol references connecting two symbols or files.",
      "inputSchema": {"type": "object", "properties": {
-         "a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a", "b"]}},
+         "a": {"type": "string"}, "b": {"type": "string"}, "root": ROOT}, "required": ["a", "b"]}},
 ]
 
 
@@ -95,7 +101,7 @@ INSTRUCTIONS = (
     "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
     "(one line summary + body with context and file paths) and commit the new docs/notes file with the change; "
     "when it replaces an earlier decision from search_decisions, list that file in supersedes. "
-    "If you work in a git worktree other than the server's root, pass it as add_note root.")
+    "If you work in a git worktree other than the server's root, pass it as root to every memlab tool.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
 LOG = Path(os.environ.get("MEMLAB_LOG") or config.home() / "logs" / "calls.jsonl")
@@ -334,13 +340,25 @@ def serve(config_path: Path | None, root: Path) -> None:
     sys.stdin = open(os.devnull)
     journal("start", root=str(root.resolve()), config=str(config_path) if config_path else None)
     index = Index(root.resolve(), cfg)
+    worktrees: dict[Path, Index] = {}
     out = sys.stdout.buffer
 
-    def journal_call(name, a, t0, text=None, error=None):
+    def pick(a: dict, build: bool = True) -> Index:
+        """The index for the call's `root`: the server's, or a worktree's (validated by note_root,
+        built in the background on first use; the shared vector store keeps unchanged chunks)."""
+        dest = note_root(index.root, a.get("root"))
+        if dest == index.root:
+            return index
+        if dest not in worktrees and build:
+            journal("start", root=str(dest), config=str(config_path) if config_path else None, worktree_of=str(index.root))
+            worktrees[dest] = Index(dest, config.load(dest, config_path))
+        return worktrees.get(dest, index)
+
+    def journal_call(name, a, t0, text=None, error=None, root=None):
         try:
             args = {k: (v[:300] if isinstance(v, str) else v) for k, v in a.items() if k != "body"}
             top = [ln[4:].split()[0] for ln in (text or "").splitlines() if ln.startswith("### ")][:10]
-            journal("call", root=str(index.root), tool=name, args=args, ms=round(1000 * (time.time() - t0)),
+            journal("call", root=str(root or index.root), tool=name, args=args, ms=round(1000 * (time.time() - t0)),
                     top=top, error=error)
         except Exception:
             pass                 # malformed arguments are the caller's error, not a reason to stop serving
@@ -369,22 +387,23 @@ def serve(config_path: Path | None, root: Path) -> None:
                 result = {"tools": TOOLS}
             elif method == "tools/call":
                 name, a = params.get("name"), params.get("arguments") or {}
-                t0 = time.time()
+                t0, ix = time.time(), index
+                ix = pick(a, build=name != "add_note")   # a note alone does not justify building an index
                 if name == "search_code":
-                    text = index.search_code(a["query"], min(int(a.get("budget_tokens", 6000)), 20000))
+                    text = ix.search_code(a["query"], min(int(a.get("budget_tokens", 6000)), 20000))
                 elif name == "search_decisions":
-                    text = index.search_decisions(a["query"], min(int(a.get("k", 5)), 15))
+                    text = ix.search_decisions(a["query"], min(int(a.get("k", 5)), 15))
                 elif name == "add_note":
-                    text = index.add_note(a["summary"], a.get("body", ""), a.get("type", "decision"),
-                                          a.get("tags") or [], a.get("root"), a.get("supersedes") or None)
+                    text = ix.add_note(a["summary"], a.get("body", ""), a.get("type", "decision"),
+                                       a.get("tags") or [], a.get("root"), a.get("supersedes") or None)
                 elif name == "explain":
-                    text = index.explain(a["name"])
+                    text = ix.explain(a["name"])
                 elif name == "find_path":
-                    text = index.find_path(a["a"], a["b"])
+                    text = ix.find_path(a["a"], a["b"])
                 else:
                     raise ValueError(f"unknown tool {name}")
                 result = {"content": [{"type": "text", "text": text}], "isError": False}
-                journal_call(name, a, t0, text)
+                journal_call(name, a, t0, text, root=ix.root)
             elif method == "ping":
                 result = {}
             else:

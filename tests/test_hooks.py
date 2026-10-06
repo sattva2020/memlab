@@ -24,6 +24,17 @@ def test_digest_lists_newest_decision_records_with_summary(tmp_path):
     assert any("docs/notes/n.md — picked Y" in ln for ln in out)
 
 
+def test_session_start_in_a_worktree_tells_the_agent_to_pass_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(hooks, "LOG", tmp_path / "none.jsonl")
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    main.mkdir(); _git(main, "init", "-q")
+    _git(main, "config", "user.email", "t@t"); _git(main, "config", "user.name", "t")
+    (main / "a.py").write_text("x = 1\n"); _git(main, "add", "."); _git(main, "commit", "-qm", "c")
+    _git(main, "worktree", "add", "-q", str(wt))
+    assert f'root="{wt.resolve().as_posix()}"' in hooks.session_start({"cwd": str(wt)})
+    assert hooks.session_start({"cwd": str(main)}) == ""
+
+
 def test_prompt_hint_is_gated_by_length_recent_calls_and_cooldown(tmp_path, monkeypatch):
     log, state = tmp_path / "calls.jsonl", tmp_path / "hint-state.json"
     monkeypatch.setattr(hooks, "LOG", log); monkeypatch.setattr(hooks, "STATE", state)

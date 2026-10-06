@@ -122,7 +122,12 @@ def session_start(data: dict) -> str:
     lines = digest(root) if top else []
     if lines:
         parts.append("memlab — newest decision records here (search_decisions finds the rest):\n" + "\n".join(lines))
-    builds = [e for e in _mine(log_tail(), roots(root)) if e.get("event") in ("ready", "build_failed")]
+    rs = roots(root)
+    if len(rs) > 1:      # a linked worktree: the desktop app starts memlab in the main checkout
+        parts.append(f'memlab: this session works in the git worktree {Path(top).as_posix()}, while the memlab '
+                     f'server may index the main checkout. Pass root="{Path(top).as_posix()}" to every memlab tool '
+                     "(search_code, search_decisions, explain, find_path, add_note) to search and write this branch.")
+    builds = [e for e in _mine(log_tail(), rs) if e.get("event") in ("ready", "build_failed")]
     if builds and builds[-1]["event"] == "build_failed":
         parts.append(f"memlab warning: the last index build for this repo failed ({builds[-1]['ts']}): "
                      f"{builds[-1].get('error', '')[:300].rstrip('.')}. memlab tools may answer with that error.")
