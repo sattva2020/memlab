@@ -87,3 +87,25 @@ def test_results_from_files_changed_after_indexing_are_marked(tmp_path):
     (tmp_path / "edited.py").write_text("y"); (tmp_path / "new.md").write_text("z")
     assert idx._mark("old.py") == "  ⟨superseded by n.md⟩" and idx._mark("new.md") == ""
     assert "stale" in idx._mark("edited.py") and "deleted" in idx._mark("gone.py")
+
+
+def test_note_warnings_uncommitted_notes_and_main_behind_origin(tmp_path):
+    import subprocess
+    from memlab.hooks import note_warnings
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       check=True, capture_output=True)
+    origin, main, wt = tmp_path / "origin", tmp_path / "main", tmp_path / "wt"
+    git(tmp_path, "init", "-q", "-b", "main", str(origin))
+    git(origin, "commit", "-q", "--allow-empty", "-m", "a")
+    git(tmp_path, "clone", "-q", str(origin), str(main))
+    assert note_warnings(main) == []                                  # clean and up to date
+    git(origin, "commit", "-q", "--allow-empty", "-m", "b")
+    git(main, "fetch", "-q")
+    git(main, "worktree", "add", "-q", "-b", "feat", str(wt))
+    (wt / "docs" / "notes").mkdir(parents=True)
+    (wt / "docs" / "notes" / "n.md").write_text("x")
+    w = note_warnings(main)
+    assert any("1 uncommitted" in x and "/wt/docs/notes" in x for x in w)
+    assert any("1 commit(s) behind origin/main" in x for x in w)

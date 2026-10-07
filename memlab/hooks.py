@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 if __package__ in (None, ""):                     # run as a file by the hook command
@@ -114,6 +115,30 @@ def digest(root: Path) -> list[str]:
     return out
 
 
+def note_warnings(top: Path) -> list[str]:
+    """Where notes can still go missing: uncommitted files in docs/notes of any worktree of the repo
+    (lost when that worktree is removed), and a main checkout behind origin (its index misses notes
+    merged elsewhere). Uses the last fetched origin refs, no network."""
+    out = []
+    wts = [Path(ln[9:]) for ln in _git(top, "worktree", "list", "--porcelain").splitlines()
+           if ln.startswith("worktree ")] or [top]
+    count = lambda wt: sum(1 for ln in _git(wt, "status", "--porcelain", "--", "docs/notes").splitlines() if ln.strip())
+    with ThreadPoolExecutor(16) as pool:                  # fitness has ~80 worktrees: 6 s one by one
+        counts = list(pool.map(count, wts))
+    for wt, n in zip(wts, counts):
+        if n:
+            out.append(f"{n} uncommitted file(s) in {wt.as_posix()}/docs/notes — commit them with their change, "
+                       "or they are lost when that worktree is removed")
+    remote = _git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").strip()     # e.g. origin/main
+    main = wts[0]                                                                          # the main checkout
+    if remote and _git(main, "branch", "--show-current").strip() == remote.split("/", 1)[-1]:
+        behind = _git(main, "rev-list", "--count", f"HEAD..{remote}").strip()
+        if behind not in ("", "0"):
+            out.append(f"the main checkout {main.as_posix()} is {behind} commit(s) behind {remote} "
+                       "(as of the last fetch) — its memlab index misses notes merged there until a pull")
+    return out
+
+
 def session_start(data: dict) -> str:
     cwd = Path(data.get("cwd") or os.getcwd())
     top = _git(cwd, "rev-parse", "--show-toplevel").strip()
@@ -127,6 +152,9 @@ def session_start(data: dict) -> str:
         parts.append(f'memlab: this session works in the git worktree {Path(top).as_posix()}, while the memlab '
                      f'server may index the main checkout. Pass root="{Path(top).as_posix()}" to every memlab tool '
                      "(search_code, search_decisions, explain, find_path, add_note) to search and write this branch.")
+    warn = note_warnings(root) if top else []
+    if warn:
+        parts.append("memlab warning — decision notes at risk (tell the user):\n" + "\n".join(f"- {w}" for w in warn))
     builds = [e for e in _mine(log_tail(), rs) if e.get("event") in ("ready", "build_failed")]
     if builds and builds[-1]["event"] == "build_failed":
         parts.append(f"memlab warning: the last index build for this repo failed ({builds[-1]['ts']}): "
@@ -244,6 +272,10 @@ def main(argv: list[str]) -> None:
     verb = argv[0] if argv else ""
     if verb == "install":
         print(install())
+        return
+    if verb == "notes":                               # for /memlab status: python hooks.py notes [cwd]
+        top = _git(Path(argv[1] if len(argv) > 1 else os.getcwd()), "rev-parse", "--show-toplevel").strip()
+        print("\n".join(note_warnings(Path(top))) if top else "", end="")
         return
     try:
         data = json.loads(sys.stdin.read() or "{}")
