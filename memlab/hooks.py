@@ -17,6 +17,7 @@ import datetime
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -210,7 +211,7 @@ def usage(transcript: Path, root: Path) -> list[dict]:
                     continue
                 if it.get("type") == "tool_use":
                     name, args = it.get("name", ""), it.get("input") or {}
-                    if name.startswith("mcp__memlab__search_"):
+                    if re.match(r"mcp__(plugin_memlab_)?memlab__search_", name):   # user-scope MCP or the plugin's
                         calls[it.get("id")] = (n, e.get("timestamp", ""), name.rsplit("__", 1)[-1], args.get("query", ""))
                     elif name in EDIT_TOOLS and args.get("file_path"):
                         try:

@@ -68,7 +68,7 @@ def test_usage_marks_shown_files_the_session_edited_afterwards(tmp_path):
     t = tmp_path / "t.jsonl"
     t.write_text("\n".join([
         edit("a.py"),                                                   # before the search: not "used"
-        line("assistant", {"type": "tool_use", "id": "s1", "name": "mcp__memlab__search_code",
+        line("assistant", {"type": "tool_use", "id": "s1", "name": "mcp__plugin_memlab_memlab__search_code",
                            "input": {"query": "q"}}),
         line("user", {"type": "tool_result", "tool_use_id": "s1", "content": [
             {"type": "text", "text": "search_code: 2\n\n### a.py:1  f\nx\n\n### b.py:3  ⟨stale⟩\ny"}]}),
