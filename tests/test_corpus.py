@@ -91,3 +91,10 @@ def test_list_files_outside_git_walks_the_folder(tmp_path):
     (tmp_path / "node_modules").mkdir(); (tmp_path / "node_modules" / "c.js").write_text("z\n")
     from memlab.corpus import list_files
     assert list_files(tmp_path, [], [], 400_000) == ["a.py"]
+
+
+def test_home_and_drive_root_are_not_walked():
+    from pathlib import Path
+    from memlab.corpus import _walk
+    assert _walk(Path.home()) == []
+    assert _walk(Path(Path.home().anchor)) == []

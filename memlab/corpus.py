@@ -110,6 +110,9 @@ def _walk(root: Path) -> list[str]:
     """Files of a folder that is not a git repo (the server starts in any session cwd).
     Skips dot-folders and node_modules; stops at WALK_LIMIT so a home directory stays cheap."""
     # ponytail: no .gitignore parsing outside git; git init the folder for exact listing
+    r = root.resolve()
+    if r == Path.home().resolve() or r == Path(r.anchor):
+        return []           # a session opened in ~ or a drive root is not a project (~ cost 74 s / 18k chunks)
     out = []
     for d, dirs, files in os.walk(root):
         dirs[:] = [x for x in dirs if not x.startswith(".") and x != "node_modules"]
