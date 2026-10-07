@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -102,7 +103,14 @@ def save_store(path: Path, new: dict[str, np.ndarray]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npz")
     np.savez(tmp, keys=np.array(list(store)), vecs=np.stack(list(store.values())))
-    os.replace(tmp, path)       # ponytail: no lock, two writers in the same instant can still lose one batch
+    # ponytail: no lock, two writers in the same instant can still lose one batch
+    for attempt in range(10):   # Windows refuses the replace while another server is reading the store
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.2 * (attempt + 1))
+    tmp.unlink(missing_ok=True)  # the store is only a cache: the vectors stay in memory, the build goes on
 
 
 class Dense:
