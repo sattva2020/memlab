@@ -1,22 +1,30 @@
 {
   "name": "memlab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Project memory for coding agents: code and decision-record search over a symbol graph (MCP), a decision digest at session start, and /memlab:status, /memlab:recall, /memlab:note.",
-  "author": { "name": "sattva2020" },
+  "author": {
+    "name": "sattva2020"
+  },
   "homepage": "https://github.com/sattva2020/memlab",
   "license": "Apache-2.0",
   "userConfig": {
     "python": {
       "type": "file",
       "title": "Python interpreter",
-      "description": "Python 3.11+ with memlab's dependencies installed (pip install numpy scipy networkx sentence-transformers). Default: python on PATH.",
-      "default": "python"
+      "description": "Path to a Python 3.11+ that has memlab's dependencies (pip install numpy scipy networkx sentence-transformers), e.g. a venv's python.exe.",
+      "required": true
     }
   },
   "mcpServers": {
     "memlab": {
       "command": "${user_config.python}",
-      "args": ["-m", "memlab", "serve", "--root", "${CLAUDE_PROJECT_DIR}"],
+      "args": [
+        "-m",
+        "memlab",
+        "serve",
+        "--root",
+        "${CLAUDE_PROJECT_DIR}"
+      ],
       "env": {
         "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}",
         "PYTHONIOENCODING": "utf-8",

@@ -60,7 +60,7 @@ one install.
 /plugin install memlab@memlab
 ```
 
-At install it asks for a Python interpreter (default: `python` on `PATH`); point it at the one you
+At install it asks for the Python interpreter (required); point it at the one you
 installed memlab's dependencies into (`pip install numpy scipy networkx sentence-transformers`).
 You get:
 
