@@ -50,6 +50,30 @@ Connect it to your agent — add to the repository's `.mcp.json`:
 }
 ```
 
+### Claude Code plugin
+
+The repository is also a Claude Code plugin: the MCP server, session hooks and three commands in
+one install.
+
+```
+/plugin marketplace add sattva2020/memlab
+/plugin install memlab@memlab
+```
+
+At install it asks for a Python interpreter (default: `python` on `PATH`); point it at the one you
+installed memlab's dependencies into (`pip install numpy scipy networkx sentence-transformers`).
+You get:
+
+- `/memlab:status` — which tree is indexed, errors, decision notes at risk, a live search check
+- `/memlab:recall <topic>` — prior decisions and the relevant code, with `path:line` sources
+- `/memlab:note` — drafts this session's decisions as `docs/notes/`, written after you pick
+- hooks: the newest decision records at session start (and, in a git worktree, a reminder to pass
+  the worktree as `root`), a one-line hint on long prompts when memlab has not been used, and at
+  session end `logs/usage.jsonl`: per search, the shown files the session then edited
+
+Caches and logs go to the plugin's data folder. Do not also keep the `.mcp.json` entry above, or
+two servers start.
+
 No config file is needed. memlab reads the Dart package from `pubspec.yaml` and import aliases
 from `tsconfig.json`, skips lockfiles and generated code, and treats `docs/adr/`,
 `docs/decisions/`, `docs/postmortems/` and `docs/notes/` as decision memory. To change any of

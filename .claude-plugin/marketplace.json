@@ -1,0 +1,14 @@
+{
+  "name": "memlab",
+  "owner": {
+    "name": "sattva2020"
+  },
+  "description": "memlab: project memory for coding agents (code and decision search over a symbol graph).",
+  "plugins": [
+    {
+      "name": "memlab",
+      "source": "./",
+      "description": "Project memory for coding agents: code and decision search (MCP), session hooks and /memlab:* commands."
+    }
+  ]
+}

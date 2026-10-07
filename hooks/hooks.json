@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "timeout": 15,
+        "command": "\"${CLAUDE_PLUGIN_OPTION_PYTHON:-python}\" \"${CLAUDE_PLUGIN_ROOT}/memlab/hooks.py\" session-start" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "timeout": 15,
+        "command": "\"${CLAUDE_PLUGIN_OPTION_PYTHON:-python}\" \"${CLAUDE_PLUGIN_ROOT}/memlab/hooks.py\" prompt-hint" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "timeout": 15,
+        "command": "\"${CLAUDE_PLUGIN_OPTION_PYTHON:-python}\" \"${CLAUDE_PLUGIN_ROOT}/memlab/hooks.py\" session-end" }] }
+    ]
+  }
+}

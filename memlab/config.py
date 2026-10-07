@@ -36,9 +36,11 @@ DEFAULTS = {
 
 
 def home() -> Path:
-    """Where caches and the journal live: MEMLAB_HOME, else the source checkout, else ~/.memlab."""
-    if os.environ.get("MEMLAB_HOME"):
-        return Path(os.environ["MEMLAB_HOME"])
+    """Where caches and the journal live: MEMLAB_HOME, else the Claude Code plugin's data dir (set for
+    the plugin's hooks), else the source checkout, else ~/.memlab."""
+    for var in ("MEMLAB_HOME", "CLAUDE_PLUGIN_DATA"):
+        if os.environ.get(var):
+            return Path(os.environ[var])
     repo = Path(__file__).resolve().parents[1]
     return repo if (repo / ".git").exists() else Path.home() / ".memlab"
 
