@@ -186,7 +186,7 @@ python -m memlab eval    --config C --cases cases.json --methods "hybrid,only:co
 
 GPU: CUDA on Windows/Linux, Apple's MPS on a Mac, the CPU otherwise; the re-ranker needs CUDA. The
 Linux and macOS checks run outside GitHub Actions: the script copies the working tree to any Docker
-host over ssh; Codemagic runs on every push to `main`.
+host over ssh; the Codemagic workflow is started from its UI or API (`POST /builds`, workflow `macos-check`).
 
 ## Limits
 
