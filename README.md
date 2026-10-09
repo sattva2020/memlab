@@ -100,6 +100,10 @@ Keep it fresh after every commit (runs in the background, never blocks a commit)
 memlab hook-install --root /path/to/repo
 ```
 
+Without the plugin, `memlab hook-install --claude` adds the session hooks to `~/.claude/settings.json` and a
+short block to `~/.claude/CLAUDE.md` between `<!-- memlab:begin -->` and `<!-- memlab:end -->`: memlab as the
+first source for project knowledge, where decisions go, worktree `root`. Re-running replaces only that block.
+
 ## What you get
 
 | | What it does |
