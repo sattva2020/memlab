@@ -5,6 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-3B3FD8"></a>
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3B3FD8">
+  <img alt="Windows | Linux | macOS" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-3B3FD8">
   <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-8B5CF6">
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-8B5CF6">
   <a href="docs/RESEARCH.md"><img alt="Pre-registered evaluation" src="https://img.shields.io/badge/evaluation-pre--registered-555"></a>
@@ -40,10 +41,6 @@ memlab explore all --root .        # -> ~/.memlab/out/<repo>/graph.html and REPO
 For a GPU, install the CUDA build of PyTorch first (pip otherwise brings the CPU one); memlab
 uses CUDA when it is there, Apple's GPU (MPS) on a Mac, and the CPU otherwise. The re-ranker runs on
 CUDA only. On macOS and Linux the interpreter is often `python3`: use it wherever this page says `python`.
-
-Checks without GitHub Actions: `scripts/ci-linux.sh user@docker-host` runs the tests and the plugin
-validation in a `python:3.11` container on a Docker host; `codemagic.yaml` does the same on a Mac
-(Apple Silicon), plus one embedding on MPS.
 
 Connect it to your agent — add to the repository's `.mcp.json`:
 
@@ -178,6 +175,18 @@ python -m memlab warm    --config C --root R                 # build the index o
 python -m memlab cases-from-git --config C --out cases.json  # evaluation cases from history
 python -m memlab eval    --config C --cases cases.json --methods "hybrid,only:code:ppr:refs:transit=1&seeds=gfy"
 ```
+
+## Platforms
+
+| OS | Checked on | What runs | Last result |
+|---|---|---|---|
+| Windows 11 | the author's machine (RTX 2070, CUDA) | tests, live MCP server in daily use | 46 passed |
+| Linux | `python:3.11-slim` container — `scripts/ci-linux.sh user@docker-host` | tests, `claude plugin validate` (plugin + mod) | 46 passed, 3 valid (2026-10-09) |
+| macOS | Codemagic `mac_mini_m2` — `codemagic.yaml`, workflow `macos-check` | tests, plugin validation, one embedding asserting Apple GPU (`mps`) | 46 passed, `device: mps` (2026-10-09) |
+
+GPU: CUDA on Windows/Linux, Apple's MPS on a Mac, the CPU otherwise; the re-ranker needs CUDA. The
+Linux and macOS checks run outside GitHub Actions: the script copies the working tree to any Docker
+host over ssh; Codemagic runs on every push to `main`.
 
 ## Limits
 
