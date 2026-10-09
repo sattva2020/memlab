@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -50,12 +51,13 @@ def judge(query: str, records: list[tuple[str, str]], timeout: float = 180) -> t
     _CWD.mkdir(exist_ok=True)
     (_CWD / "mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
     env = dict(os.environ, MEMLAB_HINT_MIN_CHARS="100000000")   # keep memlab's own prompt hint out of the judge
-    cmd = ["claude", "-p", message(query, records), "--model", MODEL, "--system-prompt", SYSTEM,
+    cmd = [shutil.which("claude") or "claude", "-p", "--model", MODEL, "--system-prompt", SYSTEM,
            "--json-schema", json.dumps(SCHEMA), "--output-format", "json", "--tools", "",
            "--strict-mcp-config", "--mcp-config", str(_CWD / "mcp.json"),
            "--disable-slash-commands", "--no-session-persistence"]
-    r = subprocess.run(cmd, cwd=_CWD, env=env, capture_output=True, text=True, encoding="utf-8",
-                       timeout=timeout, stdin=subprocess.DEVNULL)
+    # the prompt goes through stdin: claude.CMD on Windows would mangle %, ^ and & in an argument
+    r = subprocess.run(cmd, cwd=_CWD, env=env, input=message(query, records), capture_output=True, text=True,
+                       encoding="utf-8", timeout=timeout)
     out = json.loads(r.stdout)
     u = out.get("usage") or {}
     usage = {"input_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
