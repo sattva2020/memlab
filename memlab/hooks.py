@@ -249,8 +249,42 @@ def session_end(data: dict) -> str:
     return ""                                          # SessionEnd output is not shown anyway
 
 
-def install(settings: Path | None = None) -> str:
-    """Add both hooks to the user's Claude Code settings; earlier memlab entries are replaced."""
+BEGIN, END = "<!-- memlab:begin -->", "<!-- memlab:end -->"
+# What the MCP server's own instructions cannot say: memlab's place among the agent's other memory.
+# The tool rules stay in the server's instructions; this block is short and replaced on every install.
+BLOCK = f"""{BEGIN}
+<!-- written by `memlab hook-install --claude`; edits between the markers are replaced on the next install -->
+## memlab — project memory (MCP)
+
+memlab indexes the current repository: code and decision records (`docs/adr`, `docs/decisions`,
+`docs/postmortems`, `docs/notes`, `.ai-factory/patches`). The tool rules come from the server itself.
+
+- **First source for project knowledge.** Before a task: `search_decisions` and `search_code`, then read the
+  sources at the `path:line` they return instead of reading files wholesale or asking other memory first.
+- **Decisions, conclusions, postmortems about the repo** go to `add_note` (list a replaced decision in
+  `supersedes`) and are committed with the change. User preferences and working rules do not belong there.
+- **Marks:** `⟨stale⟩` / `⟨deleted⟩` — re-read the source; `⟨superseded by X⟩` — X is the current decision.
+- **Git worktree:** pass `root` = the worktree to every memlab tool (the `memlab-root` mod does it and shows
+  `memlab · worktree … · N calls` once memlab has been called).
+{END}"""
+
+
+def write_block(path: Path) -> str:
+    """Put BLOCK into a CLAUDE.md between the markers: replaced in place, else appended."""
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    i, j = text.find(BEGIN), text.find(END)
+    if 0 <= i < j:
+        text = text[:i] + BLOCK + text[j + len(END):]
+    else:
+        text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + BLOCK + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def install(settings: Path | None = None, claude_md: Path | None = None) -> str:
+    """Add the hooks to the user's Claude Code settings (earlier memlab entries are replaced) and memlab's
+    block to the user's CLAUDE.md."""
     settings = settings or Path.home() / ".claude" / "settings.json"
     data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
     if settings.exists():
@@ -265,7 +299,9 @@ def install(settings: Path | None = None) -> str:
                                 "timeout": 15}]})
         hooks[event] = kept
     settings.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return f"installed SessionStart + UserPromptSubmit + SessionEnd hooks in {settings} (backup: settings.json.bak)"
+    md = write_block(claude_md or settings.parent / "CLAUDE.md")
+    return (f"installed SessionStart + UserPromptSubmit + SessionEnd hooks in {settings} (backup: settings.json.bak) "
+            f"and memlab's block in {md}")
 
 
 def main(argv: list[str]) -> None:

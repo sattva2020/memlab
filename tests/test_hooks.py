@@ -60,6 +60,19 @@ def test_install_replaces_only_its_own_entries(tmp_path):
     assert len(json.loads(s.read_text())["hooks"]["UserPromptSubmit"]) == 1
 
 
+def test_claude_md_block_is_appended_once_then_replaced_in_place(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Mine\n\nkeep this\n", encoding="utf-8")
+    hooks.write_block(md)
+    hooks.write_block(md)
+    text = md.read_text(encoding="utf-8")
+    assert text.startswith("# Mine\n\nkeep this\n") and text.count(hooks.BEGIN) == 1
+    md.write_text(f"top\n{hooks.BEGIN}\nold\n{hooks.END}\nbottom\n", encoding="utf-8")
+    hooks.write_block(md)
+    text = md.read_text(encoding="utf-8")
+    assert text.startswith("top\n" + hooks.BEGIN) and text.endswith(hooks.END + "\nbottom\n") and "old" not in text
+
+
 def test_usage_marks_shown_files_the_session_edited_afterwards(tmp_path):
     def line(kind, item):
         return json.dumps({"type": kind, "timestamp": "t", "message": {"content": [item]}})
