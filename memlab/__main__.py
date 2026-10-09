@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import commits, corpus, evaluate, gitcases, graph, retrieve
+from . import commits, corpus, evaluate, gitcases, graph, haiku, retrieve
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -117,6 +117,7 @@ def cmd_eval(args):
         reranker = CrossEncoder(args.reranker, max_length=512, device="cuda" if cuda else "cpu",
                                 model_kwargs={"torch_dtype": torch.float16} if cuda else {})
     rerank_seconds = []
+    haiku_log, haiku_retries = {}, {}
     need_commits = any("commits=1" in m or m == "hybrid+c" or m.startswith("ptr:") for m in methods)
     code_paths = {c.path for c in chunks if Path(c.path).suffix.lower() in corpus.CODE_EXT}
     cch = commits.CommitChannel(root, chunks) if need_commits else None
@@ -176,6 +177,32 @@ def cmd_eval(args):
                 _, kk, cost, base = m.split(":", 3)
                 fs = {f: v for f, v in cch.file_scores(k["id"], q).items() if f in code_paths}
                 r[m] = ("ptr", sorted(fs, key=fs.get, reverse=True)[:int(kk)], r[base], int(cost))
+        if args.drop_gold:               # H16b/H17b leave-one-out: the case's gold documents are not in the corpus
+            keep = np.array([c.path not in {g["path"] for g in k["gold"]} for c in chunks])
+            r = {m: v[keep[v]] if isinstance(v, np.ndarray) else v for m, v in r.items()}
+        for m in methods:
+            if m.startswith("haiku:"):   # haiku:<k>:<base> — H17, Claude Haiku 5.5 re-orders the base's first k documents
+                _, kk, base = m.split(":", 2)
+                rk = r[base]
+                head, seen = [], set()           # best chunk of each of the first k documents
+                for i in rk:
+                    if chunks[i].path not in seen and len(head) < int(kk):
+                        seen.add(chunks[i].path); head.append(int(i))
+                for attempt in range(3):
+                    try:
+                        t0 = time.time()
+                        sc, usage = haiku.judge(q, [(chunks[i].path, chunks[i].text) for i in head])
+                        break
+                    except Exception as e:
+                        print(f"haiku retry {attempt + 1} on {k['id']}: {type(e).__name__}: {e}")
+                        haiku_retries[m] = haiku_retries.get(m, 0) + 1
+                        if attempt == 2:
+                            raise
+                        time.sleep(5)
+                haiku_log.setdefault(m, {})[k["id"]] = {"paths": [chunks[i].path for i in head], "scores": sc,
+                                                        "ms": round(1000 * (time.time() - t0)), **usage}
+                new = [head[i] for i in np.argsort(-np.asarray(sc), kind="stable")]
+                r[m] = np.concatenate([np.array(new, dtype=rk.dtype), rk[~np.isin(rk, head)]])
         for m in methods:
             if m.startswith("rerank:"):  # rerank:<k>:<base> — H15, cross-encoder over the base's top k
                 _, kk, base = m.split(":", 2)
@@ -204,6 +231,14 @@ def cmd_eval(args):
         print(f"rerank: median {1000 * float(np.median(rerank_seconds)):.0f} ms per query, {len(cases)} queries")
     for m, on in gate_on.items():
         print(f"{m}: channel on for {on}/{len(cases)} queries")
+    for m, log in haiku_log.items():         # H17: wall time per CLI call, usage, how often "no record"
+        ms = np.array([v["ms"] for v in log.values()])
+        best = np.array([max(v["scores"]) for v in log.values()])
+        print(f"{m}: CLI wall time p50 {np.median(ms):.0f} ms, p95 {np.percentile(ms, 95):.0f} ms; "
+              f"{sum(v['input_tokens'] for v in log.values()):,} input / {sum(v['output_tokens'] for v in log.values()):,} "
+              f"output tokens, notional ${sum(v['cost'] for v in log.values()):.4f}; retries {haiku_retries.get(m, 0)}; "
+              f"models {sorted({x for v in log.values() for x in v['models']})}; no-match (best < {haiku.NO_MATCH}) "
+              f"{int((best < haiku.NO_MATCH).sum())}/{len(best)}; at 0.3/0.7: {int((best < 0.3).sum())}/{int((best < 0.7).sum())}")
     def add_oracles(scores):
         # oracle:<m1>|<m2> — per case the better of two single-type tools (H8 upper bound)
         for m in methods:
@@ -214,7 +249,7 @@ def cmd_eval(args):
 
     budgets = [int(b) for b in args.budgets.split(",")]
     report = {"corpus": corpus.fingerprint(chunks), "chunks": len(chunks), "cases": len(cases),
-              "case_ids": [k["id"] for k in cases], "results": {}, "per_case": {}}
+              "case_ids": [k["id"] for k in cases], "results": {}, "per_case": {}, "haiku": haiku_log}
     for budget in budgets:
         for level in ("file", "symbol"):
             scores = {m: np.array([evaluate.recall(k, picked(rankings[k["id"]][m], budget), level)
@@ -391,6 +426,8 @@ def main():
                            help="name=results.json from an external system (see tools/graphify_adapter.py)")
             s.add_argument("--lang", choices=["ru", "en"], help="keep only Russian (Cyrillic) or English queries")
             s.add_argument("--reranker", default="BAAI/bge-reranker-v2-m3", help="cross-encoder for rerank:<k>:<base>")
+            s.add_argument("--drop-gold", action="store_true",
+                           help="remove each case's gold documents from the rankings (H16b/H17b leave-one-out)")
             s.add_argument("--out")
     args = p.parse_args()
     args.fn(args)
