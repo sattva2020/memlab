@@ -59,3 +59,13 @@ def test_rerank_scores_pairs_and_is_none_without_gpu(monkeypatch):
     finally:
         srv.shutdown()
         embedder._models.clear()
+
+
+def test_device_prefers_cuda_then_mps_then_cpu():
+    from types import SimpleNamespace as NS
+    from memlab.embedder import device
+    t = lambda cuda, mps: NS(cuda=NS(is_available=lambda: cuda), backends=NS(mps=NS(is_available=lambda: mps)))
+    assert device(t(True, True)) == "cuda"
+    assert device(t(False, True)) == "mps"
+    assert device(t(False, False)) == "cpu"
+    assert device(NS(cuda=NS(is_available=lambda: False), backends=NS())) == "cpu"   # torch without MPS support

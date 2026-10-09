@@ -38,7 +38,12 @@ memlab explore all --root .        # -> ~/.memlab/out/<repo>/graph.html and REPO
 ```
 
 For a GPU, install the CUDA build of PyTorch first (pip otherwise brings the CPU one); memlab
-uses CUDA when it is there and the CPU otherwise.
+uses CUDA when it is there, Apple's GPU (MPS) on a Mac, and the CPU otherwise. The re-ranker runs on
+CUDA only. On macOS and Linux the interpreter is often `python3`: use it wherever this page says `python`.
+
+Checks without GitHub Actions: `scripts/ci-linux.sh user@docker-host` runs the tests and the plugin
+validation in a `python:3.11` container on a Docker host; `codemagic.yaml` does the same on a Mac
+(Apple Silicon), plus one embedding on MPS.
 
 Connect it to your agent — add to the repository's `.mcp.json`:
 

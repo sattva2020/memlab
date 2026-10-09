@@ -121,7 +121,7 @@ class Dense:
                  encoder=None):
         """query_prefix/doc_prefix: instruction prefixes some models need (e5: "query: " /
         "passage: "; Qwen3: an instruction on the query only); the doc prefix and max_len are
-        part of the cache key. Uses CUDA in fp16 when available. `encoder`: anything with a
+        part of the cache key. Uses CUDA in fp16 when available, else Apple's MPS, else the CPU. `encoder`: anything with a
         SentenceTransformer-style `.encode` (the shared embedder client); then no model is loaded here."""
         import hashlib
         if encoder is not None:
@@ -129,8 +129,9 @@ class Dense:
         else:
             import torch
             from sentence_transformers import SentenceTransformer
+            from .embedder import device
             cuda = torch.cuda.is_available()
-            self.model = SentenceTransformer(model, device="cuda" if cuda else "cpu",
+            self.model = SentenceTransformer(model, device=device(torch),
                                              model_kwargs={"torch_dtype": torch.float16} if cuda else {})
             if max_len:
                 self.model.max_seq_length = max_len

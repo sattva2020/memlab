@@ -35,12 +35,18 @@ _models: dict[tuple, object] = {}
 _lock = threading.Lock()         # one GPU, one encode at a time
 
 
+def device(torch) -> str:
+    """CUDA, else Apple's GPU (MPS, fp32), else the CPU."""
+    if torch.cuda.is_available():
+        return "cuda"
+    return "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
+
+
 def _load(model: str, max_len: int | None):
     import torch
     from sentence_transformers import SentenceTransformer
     cuda = torch.cuda.is_available()
-    m = SentenceTransformer(model, device="cuda" if cuda else "cpu",
-                            model_kwargs={"torch_dtype": torch.float16} if cuda else {})
+    m = SentenceTransformer(model, device=device(torch), model_kwargs={"torch_dtype": torch.float16} if cuda else {})
     if max_len:
         m.max_seq_length = max_len
     return m
