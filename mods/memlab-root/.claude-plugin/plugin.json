@@ -1,0 +1,9 @@
+{
+  "name": "memlab-root",
+  "version": "0.1.0",
+  "description": "memlab in git worktrees: adds the session's worktree as root to every memlab tool call, and a status line with the worktree and the call count.",
+  "author": {
+    "name": "sattva2020"
+  },
+  "license": "Apache-2.0"
+}

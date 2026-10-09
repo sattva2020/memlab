@@ -9,6 +9,11 @@
       "name": "memlab",
       "source": "./",
       "description": "Project memory for coding agents: code and decision search (MCP), session hooks and /memlab:* commands."
+    },
+    {
+      "name": "memlab-root",
+      "source": "./mods/memlab-root",
+      "description": "Mod: in a git worktree session, adds the worktree as root to every memlab tool call; status line with the call count. Works with the plugin or a manual memlab setup."
     }
   ]
 }

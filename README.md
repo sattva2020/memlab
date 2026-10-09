@@ -74,6 +74,14 @@ You get:
 Caches and logs go to the plugin's data folder. Do not also keep the `.mcp.json` entry above, or
 two servers start.
 
+In git worktree sessions of the Claude desktop app the server indexes the main checkout. The
+`memlab-root` mod (Claude Code 2.1.287+) adds the session's worktree as `root` to every memlab call
+and shows a status line; it works with the plugin or with the `.mcp.json` setup:
+
+```
+/plugin install memlab-root@memlab
+```
+
 No config file is needed. memlab reads the Dart package from `pubspec.yaml` and import aliases
 from `tsconfig.json`, skips lockfiles and generated code, and treats `docs/adr/`,
 `docs/decisions/`, `docs/postmortems/` and `docs/notes/` as decision memory. To change any of
