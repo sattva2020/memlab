@@ -109,3 +109,11 @@ def test_note_warnings_uncommitted_notes_and_main_behind_origin(tmp_path):
     w = note_warnings(main)
     assert any("1 uncommitted" in x and "/wt/docs/notes" in x for x in w)
     assert any("1 commit(s) behind origin/main" in x for x in w)
+
+
+def test_index_outside_git_waits_for_the_first_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(serve, "LOG", tmp_path / "calls.jsonl")
+    assert serve.is_git(tmp_path) is False
+    idx = serve.Index(tmp_path, {})
+    assert idx._started is False and not idx.ready.is_set()
+    assert '"deferred"' in (tmp_path / "calls.jsonl").read_text()

@@ -56,6 +56,10 @@ def summary(evs, root):
         state = f"ready: {ready['chunks']} chunks in {ready['seconds']}s"
     elif failed:
         state = f"BUILD FAILED: {failed['error'][:300]}"
+    elif any(e["event"] == "exit" for e in sess):
+        state = "session closed before the index was ready"
+    elif any(e["event"] == "deferred" for e in sess):
+        state = "idle: not a git repository, the index builds on the first call"
     else:
         state = "started, no ready yet (building or hung)"
     lines = [root, f"  last start {s['ts']} pid {s['pid']} - {state}",

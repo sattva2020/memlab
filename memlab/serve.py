@@ -171,6 +171,12 @@ def note_root(root: Path, target: str | None) -> Path:
     return t
 
 
+def is_git(root: Path) -> bool:
+    r = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True,
+                       text=True, stdin=subprocess.DEVNULL)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
 def log(msg: str) -> None:
     print(f"[memlab] {msg}", file=sys.stderr, flush=True)
 
@@ -183,7 +189,18 @@ class Index:
         self.built = time.time()     # files read after this; a newer mtime means the chunk may be out of date
         self.fresh: set[str] = set()  # notes added through add_note: newer than the build, yet indexed
         self.superseded: dict[str, str] = {}
-        threading.Thread(target=self._build, daemon=True).start()
+        self._started, self._lock = False, threading.Lock()
+        if is_git(root):
+            self._start()
+        else:                        # app folders, scratch dirs (a user-scope server starts in every session):
+            journal("deferred", root=str(root))   # build only when a tool is called
+            log("not a git repository: the index is built on the first call")
+
+    def _start(self) -> None:
+        with self._lock:
+            if not self._started:
+                self._started = True
+                threading.Thread(target=self._build, daemon=True).start()
 
     def _build(self) -> None:
         try:
@@ -224,6 +241,7 @@ class Index:
             self.ready.set()
 
     def wait(self) -> None:
+        self._start()
         self.ready.wait()
         if self.error:
             raise RuntimeError(f"memlab index failed to build: {self.error}")
@@ -231,6 +249,8 @@ class Index:
     # ------------------------------------------------------------------ tools
     def search_code(self, query: str, budget: int) -> str:
         self.wait()
+        if not self.chunks:
+            return f"search_code: 0 chunks — nothing is indexed under {self.root}"
         qt = retrieve.query_tokens(query, True)
         bs = self.bm25.scores(qt)
         rb, rd = retrieve.rank(bs), retrieve.rank(self.dense.scores(query))
@@ -417,3 +437,4 @@ def serve(config_path: Path | None, root: Path) -> None:
                       "result": {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True}})
             else:
                 send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": str(e)}})
+    journal("exit", root=str(index.root))     # the client closed the session: a start without ready was not a hang
