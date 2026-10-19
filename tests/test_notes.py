@@ -21,6 +21,14 @@ def test_different_notes_never_collide(tmp_path):
     assert a != b
 
 
+def test_a_note_records_its_branch_and_none_outside_git(tmp_path):
+    assert "branch:" not in (tmp_path / write_note(tmp_path, "use X", now=NOW)).read_text(encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    git("init", "-q", "-b", "agent/x")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+    assert 'branch: "agent/x"\n' in (tmp_path / write_note(tmp_path, "use Y", now=NOW)).read_text(encoding="utf-8")
+
+
 def test_note_root_accepts_only_a_worktree_of_the_same_repo(tmp_path):
     git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)
     main, wt, other = tmp_path / "main", tmp_path / "wt", tmp_path / "other"

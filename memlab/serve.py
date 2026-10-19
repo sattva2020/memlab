@@ -124,8 +124,12 @@ def write_note(root: Path, summary: str, body: str = "", kind: str = "decision",
     """A new note file, one per call: date + slug + content hash, created exclusively."""
     now = now or datetime.datetime.now()
     slug = "-".join(re.findall(r"[^\W_]+", summary.lower()))[:60].strip("-") or "note"
+    br = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                        text=True, stdin=subprocess.DEVNULL)
+    branch = br.stdout.strip() if br.returncode == 0 and br.stdout.strip() != "HEAD" else ""  # which worktree line wrote it
     text = (f"---\ntype: {kind}\ncreated: '{now.isoformat(timespec='seconds')}'\n"
-            f"tags: {json.dumps(tags or [], ensure_ascii=False)}\n"
+            + (f"branch: {json.dumps(branch, ensure_ascii=False)}\n" if branch else "")
+            + f"tags: {json.dumps(tags or [], ensure_ascii=False)}\n"
             + (f"supersedes: {json.dumps(supersedes, ensure_ascii=False)}\n" if supersedes else "")
             + f"summary: {json.dumps(summary, ensure_ascii=False)}\n---\n# {summary}\n\n{body}".rstrip() + "\n")
     h = hashlib.sha1(text.encode()).hexdigest()[:8]
