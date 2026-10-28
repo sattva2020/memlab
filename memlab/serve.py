@@ -87,6 +87,10 @@ TOOLS = [
 
 
 NOTES_DIR = "docs/notes"
+NOTE_INSTRUCTIONS = ("- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
+                     "(one line summary + body with context and file paths) and commit the new docs/notes file with "
+                     "the change; when it replaces an earlier decision from search_decisions, list that file in "
+                     "supersedes. ")
 # Sent in `initialize`; MCP clients put it into the session's system prompt, so every project
 # that has the server connected gets the usage rules without a line in its CLAUDE.md.
 INSTRUCTIONS = (
@@ -98,9 +102,7 @@ INSTRUCTIONS = (
     "- Before stating a code fact from a result, read the source: the index is built from the working tree "
     "when the server starts, so files changed later in the session are not in it (results from such files "
     "are marked ⟨stale⟩ or ⟨deleted⟩).\n"
-    "- When a decision, conclusion or postmortem about the project emerges, record it with add_note "
-    "(one line summary + body with context and file paths) and commit the new docs/notes file with the change; "
-    "when it replaces an earlier decision from search_decisions, list that file in supersedes. "
+    + NOTE_INSTRUCTIONS +
     "If you work in a git worktree other than the server's root, pass it as root to every memlab tool.")
 # One JSON line per server start, index build and tool call: which servers hang, what agents
 # actually ask, what came back. Outside every served project; user data, never committed.
@@ -351,6 +353,12 @@ class Index:
 
 
 def serve(config_path: Path | None, root: Path) -> None:
+    mode = os.environ.get("MEMLAB_TOOLS", "all")
+    if mode not in ("retrieval", "all"):
+        raise ValueError("MEMLAB_TOOLS must be 'retrieval' or 'all'")
+    tools = [t for t in TOOLS if mode == "all" or t["name"] != "add_note"]
+    enabled = {t["name"] for t in tools}
+    instructions = INSTRUCTIONS.replace(NOTE_INSTRUCTIONS, "", 1) if mode == "retrieval" else INSTRUCTIONS
     cfg = config.load(root.resolve(), config_path)
     # Read JSON-RPC from a private duplicate of stdin and point fd 0 at NUL before any work starts.
     # On Windows a thread that touches the process stdin (a DLL loading, a child `git`) blocks
@@ -358,7 +366,7 @@ def serve(config_path: Path | None, root: Path) -> None:
     stdin = os.fdopen(os.dup(0), "rb")
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
     sys.stdin = open(os.devnull)
-    journal("start", root=str(root.resolve()), config=str(config_path) if config_path else None)
+    journal("start", root=str(root.resolve()), config=str(config_path) if config_path else None, tools=mode)
     index = Index(root.resolve(), cfg)
     worktrees: dict[Path, Index] = {}
     out = sys.stdout.buffer
@@ -370,7 +378,8 @@ def serve(config_path: Path | None, root: Path) -> None:
         if dest == index.root:
             return index
         if dest not in worktrees and build:
-            journal("start", root=str(dest), config=str(config_path) if config_path else None, worktree_of=str(index.root))
+            journal("start", root=str(dest), config=str(config_path) if config_path else None,
+                    worktree_of=str(index.root), tools=mode)
             worktrees[dest] = Index(dest, config.load(dest, config_path))
         return worktrees.get(dest, index)
 
@@ -402,12 +411,14 @@ def serve(config_path: Path | None, root: Path) -> None:
                 result = {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                           "capabilities": {"tools": {}},
                           "serverInfo": {"name": "memlab", "version": "0.1.0"},
-                          "instructions": INSTRUCTIONS}
+                          "instructions": instructions}
             elif method == "tools/list":
-                result = {"tools": TOOLS}
+                result = {"tools": tools}
             elif method == "tools/call":
                 name, a = params.get("name"), params.get("arguments") or {}
-                t0, ix = time.time(), index
+                t0 = time.time()
+                if name not in enabled:
+                    raise ValueError(f"unknown tool {name}")   # retrieval mode: add_note stays unpublished
                 ix = pick(a, build=name != "add_note")   # a note alone does not justify building an index
                 if name == "search_code":
                     text = ix.search_code(a["query"], min(int(a.get("budget_tokens", 6000)), 20000))
