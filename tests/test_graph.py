@@ -102,3 +102,42 @@ def test_aider_weighting_boosts_specific_names_and_damps_common_ones():
     w = lambda a, b: g.ref_w[(min(a, b), max(a, b))]
     assert abs(w(user, rc) - 10 * 2 ** 0.5) < 1e-9     # long camel name x10, mentioned twice
     assert abs(w(user, hp) - 0.1) < 1e-9               # _private x0.1, mentioned once
+
+
+def test_mjs_imports_and_symbol_references():
+    files = {
+        "src/entry.js": "import './main.mjs';\n",
+        "src/main.mjs": ("import { Helper } from './dep.mjs';\n"
+                         "export { Other } from './other.mjs';\n"
+                         "export async function start() { return Helper(); }\n"),
+        "src/dep.mjs": "export class Helper {}\n",
+        "src/other.mjs": "export class Other {}\n",
+    }
+    chunks = [c for p, t in files.items() for c in chunk_file(p, t)]
+    g = Graph(chunks)
+    assert g.file_edges["src/entry.js"] == {"src/main.mjs"}
+    assert g.file_edges["src/main.mjs"] == {"src/entry.js", "src/dep.mjs", "src/other.mjs"}
+    start = next(i for i, c in enumerate(chunks) if c.symbol == "start")
+    helper = next(i for i, c in enumerate(chunks) if c.symbol == "Helper")
+    assert helper in g.refs[start]
+
+
+def test_mjs_extensionless_and_index_imports():
+    files = {
+        "src/app.mjs": "import './util';\nimport './kit';\n",
+        "src/util.mjs": "export const u = 1\n",
+        "src/kit/index.mjs": "export const k = 1\n",
+    }
+    chunks = [c for p, t in files.items() for c in chunk_file(p, t)]
+    g = Graph(chunks)
+    assert g.file_edges["src/app.mjs"] == {"src/util.mjs", "src/kit/index.mjs"}
+
+
+def test_upper_case_mjs_suffix_still_links():
+    files = {
+        "src/Main.MJS": "import { H } from './h.mjs';\nexport function start() { return H(); }\n",
+        "src/h.mjs": "export function H() {}\n",
+    }
+    chunks = [c for p, t in files.items() for c in chunk_file(p, t)]
+    g = Graph(chunks)
+    assert g.file_edges["src/Main.MJS"] == {"src/h.mjs"}

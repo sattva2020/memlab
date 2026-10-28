@@ -45,8 +45,8 @@ def _resolve(src: str, target: str, files: set[str], dart_pkg: str, dart_root: s
         return None                                  # external package or unmapped scope
     else:                                            # relative path; a bare package name simply won't resolve
         cand = posixpath.normpath(posixpath.join(posixpath.dirname(src), target))
-    for c in (cand, cand + ".ts", cand + ".tsx", cand + ".js", cand + ".jsx",
-              cand + "/index.ts", cand + "/index.tsx", cand + "/index.js"):
+    for c in (cand, cand + ".ts", cand + ".tsx", cand + ".js", cand + ".mjs", cand + ".jsx",
+              cand + "/index.ts", cand + "/index.tsx", cand + "/index.js", cand + "/index.mjs"):
         if c in files:
             return c
     return None
@@ -71,11 +71,12 @@ class Graph:
         for path, parts in texts.items():
             text = "".join(parts)
             targets = []
-            if path.endswith(".dart"):
+            lp = path.lower()          # the corpus admits upper-case suffixes; parse them the same
+            if lp.endswith(".dart"):
                 targets = IMPORT_DART.findall(text)
-            elif path.endswith((".ts", ".tsx", ".js", ".jsx", ".astro")):
+            elif lp.endswith((".ts", ".tsx", ".js", ".mjs", ".jsx", ".astro")):
                 targets = IMPORT_TS.findall(text)
-            elif path.endswith((".md", ".mdx")):
+            elif lp.endswith((".md", ".mdx")):
                 targets = MD_LINK.findall(text) + REPO_PATH.findall(text)
             for t in targets:
                 r = _resolve(path, t, files, dart_pkg, dart_root, aliases) or (t if t in files else None)

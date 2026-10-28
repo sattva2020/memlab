@@ -6,6 +6,7 @@ headings, everything else into fixed windows. Long chunks are split into parts.
 """
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import hashlib
 import os
@@ -17,9 +18,9 @@ from pathlib import Path
 MAX_CHARS = 6000          # ~1.5k tokens; longer chunks are split into parts
 WINDOW = 3000             # window size for unstructured text
 
-CODE_EXT = {".dart", ".ts", ".tsx", ".js", ".jsx", ".py", ".kt", ".swift", ".astro"}
+CODE_EXT = {".dart", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".py", ".kt", ".swift", ".astro"}
 MD_EXT = {".md", ".mdx"}
-TEXT_EXT = {".yml", ".yaml", ".json", ".sql", ".sh", ".toml", ".txt", ".html", ".css"}
+TEXT_EXT = {".yml", ".yaml", ".json", ".sql", ".sh", ".ps1", ".toml", ".txt", ".html", ".css"}
 
 # Top-level declarations (column 0). Group 1 = symbol name.
 DECL = re.compile(
@@ -145,13 +146,35 @@ def list_files(root: Path, include: list[str], exclude: list[str], max_bytes: in
     return keep
 
 
+BOMS = ((codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"))
+
+
+def _read_text(path: Path) -> str | None:
+    """UTF-8, or a BOM-marked variant (UTF-32 checked before UTF-16: their BOMs share a prefix).
+    Newlines are normalized like read_text() did. Non-UTF-8 files without a BOM (e.g. CP1251
+    .ps1) are skipped: indexing mojibake would poison retrieval."""
+    try:
+        raw = path.read_bytes()
+    except OSError:                              # deleted after listing (a warm during checkout)
+        return None
+    for bom, enc in BOMS:
+        if raw.startswith(bom):
+            try:
+                return raw.decode(enc).replace("\r\n", "\n").replace("\r", "\n")
+            except UnicodeDecodeError:
+                return None
+    try:
+        return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError:
+        return None
+
+
 def build(root: Path, include: list[str], exclude: list[str], max_bytes: int,
           keep_always: list[str] = ()) -> list[Chunk]:
     chunks: list[Chunk] = []
     for p in list_files(root, include, exclude, max_bytes, keep_always):
-        try:
-            text = (root / p).read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):    # OSError: deleted after listing (a warm during checkout)
+        if (text := _read_text(root / p)) is None:
             continue
         chunks += chunk_file(p, text)
     return chunks
