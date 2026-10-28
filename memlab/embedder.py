@@ -31,7 +31,7 @@ from . import config
 # 100 ports that move on every reboot. 8765 fell into such a block (8668-8767) on 2026-10-10.
 PORT = int(os.environ.get("MEMLAB_EMBED_PORT", "18765"))
 IDLE = int(os.environ.get("MEMLAB_EMBED_IDLE", "1800"))
-PROTO = 2                        # bump when requests change: clients replace an older running process
+PROTO = 3                        # bump when requests change: clients replace an older running process
 SLICE = 256                      # texts per request: long index builds stay under any HTTP timeout
 
 _models: dict[tuple, object] = {}
@@ -84,7 +84,15 @@ class _Handler(BaseHTTPRequestHandler):
             key = ("rerank", req["model"])
             with _lock:
                 if key not in _models:
-                    _models[key] = _load_reranker(req["model"])
+                    try:
+                        _models[key] = _load_reranker(req["model"])
+                    except Exception as e:
+                        _models[key] = None   # negative cache: the model is not loadable this process
+                        print(f"[memlab] reranker_disabled: cannot load {req['model']}: "
+                              f"{type(e).__name__}: {e}. Continuing without reranking. Download the "
+                              f"model into the Hugging Face cache and restart the embedder to enable "
+                              f"it, or set MEMLAB_RERANK=0 to skip it and silence this warning.",
+                              file=sys.stderr, flush=True)
                 m = _models[key]
                 s = None if m is None else m.predict([(req["query"], t) for t in req["texts"]],
                                                      batch_size=16, show_progress_bar=False)

@@ -230,7 +230,7 @@ class Index:
             self.dec_dense.scores("warm up")    # not inside the first tool call (was 41 s after an idle exit)
             self.reranker = None if os.environ.get("MEMLAB_RERANK") == "0" else embedder.Client(RERANKER)
             if self.reranker and self.reranker.rerank("warm up", ["warm up"]) is None:
-                self.reranker = None            # no GPU: keep the plain ranking
+                self.reranker = None            # no GPU or the model cannot load: keep the plain ranking
             journal("ready", root=str(self.root), chunks=len(self.chunks), seconds=round(time.time() - t, 1),
                     reembedded=self.dense.reembedded + self.dec_dense.reembedded)
         except Exception as e:  # surfaced to the caller instead of a silent dead server
