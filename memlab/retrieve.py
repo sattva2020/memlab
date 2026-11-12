@@ -8,7 +8,9 @@ from __future__ import annotations
 import math
 import os
 import re
+import threading
 import time
+import zipfile
 from collections import Counter
 from pathlib import Path
 
@@ -91,17 +93,28 @@ class BM25:
         return s
 
 
+def load_store(path: Path) -> dict[str, np.ndarray]:
+    """Read the per-model store; a damaged file counts as empty (it is only a cache, rewritten on the
+    next save) instead of failing every build — a bad CRC in vecs.npy took memlab down on 2026-11-11."""
+    if not path.exists():
+        return {}
+    try:
+        with np.load(path) as z:
+            return dict(zip(z["keys"].tolist(), z["vecs"]))
+    except (zipfile.BadZipFile, ValueError, EOFError, KeyError, OSError):
+        return {}
+
+
 def save_store(path: Path, new: dict[str, np.ndarray]) -> None:
     """Add vectors to the shared per-model store. Servers of every project build at the same time:
     re-read the file just before writing and replace it atomically, so one build does not drop
     the vectors another one wrote since it loaded the store (that cost Cryonick a full re-embed)."""
-    store: dict[str, np.ndarray] = {}
-    if path.exists():
-        with np.load(path) as z:
-            store = dict(zip(z["keys"].tolist(), z["vecs"]))
+    store = load_store(path)
     store.update(new)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npz")
+    # pid + thread: one server builds several roots (repo + worktrees) in parallel threads; a pid-only
+    # name let two of them write the same tmp file and replace the store with a mix (2026-11-09)
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp.npz")
     np.savez(tmp, keys=np.array(list(store)), vecs=np.stack(list(store.values())))
     # ponytail: no lock, two writers in the same instant can still lose one batch
     for attempt in range(10):   # Windows refuses the replace while another server is reading the store
@@ -143,17 +156,17 @@ class Dense:
             self.emb = np.zeros((0, 0), np.float32)
             return
         cache = cache_dir / f"emb-{fingerprint(chunks)}-{model.replace('/', '_')}{tag}.npy"
-        if cache.exists():
+        try:                                     # a damaged cache file is rebuilt from the store below
             self.emb = np.load(cache)
-            return
+            if len(self.emb) == len(chunks):
+                return
+        except (FileNotFoundError, ValueError, EOFError, OSError):
+            pass
         # Per-chunk store keyed by text hash: after an edit only the changed chunks are re-embedded.
         texts = [f"{doc_prefix}{c.path} {c.symbol}\n{c.text}" for c in chunks]
         keys = [hashlib.sha1(t.encode()).hexdigest() for t in texts]
         store_path = cache_dir / f"vecstore-{model.replace('/', '_')}{tag}.npz"
-        store: dict[str, np.ndarray] = {}
-        if store_path.exists():
-            with np.load(store_path) as z:
-                store = dict(zip(z["keys"].tolist(), z["vecs"]))
+        store = load_store(store_path)
         todo = [i for i, k in enumerate(keys) if k not in store]
         if todo:
             vecs = self.model.encode([texts[i] for i in todo], batch_size=16 if cuda else 64,
