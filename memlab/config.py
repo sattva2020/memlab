@@ -25,7 +25,7 @@ DEFAULTS = {
         "exclude": [
             ".claude/*", ".agents/*", ".codex/*", ".github/*", "node_modules/*", "*/node_modules/*",
             "*package-lock.json", "*pnpm-lock.yaml", "*yarn.lock", "*.lock", "*/pubspec.lock",
-            "*.g.dart", "*.freezed.dart", "*.d.ts", "*.min.js", "*/generated/*",
+            "*.g.dart", "*.freezed.dart", "*.d.ts", "*.min.js", "*.min.mjs", "*/generated/*",
         ],
     },
     "channels": {

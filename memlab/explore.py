@@ -20,7 +20,7 @@ import networkx as nx
 from .corpus import CODE_EXT, MD_EXT, TEXT_EXT, Chunk
 from .graph import Graph
 
-GENERATED = ("*.g.dart", "*.freezed.dart", "*.gen.dart", "*.min.js")
+GENERATED = ("*.g.dart", "*.freezed.dart", "*.gen.dart", "*.min.js", "*.min.mjs")
 TESTS = ("*/test/*", "*/tests/*", "test/*", "tests/*", "*_test.*", "*.test.*", "*.spec.*", "*integration_test/*")
 
 

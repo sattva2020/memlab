@@ -136,7 +136,7 @@ flowchart LR
   Q --> Q3[dense<br/>Qwen3-Embedding-0.6B] --> DEC[search_decisions<br/>ADRs, postmortems, notes]
 ```
 
-- **Chunks** are cut at top-level declarations (code) and headings (markdown).
+- **Chunks** are cut at top-level declarations (code, `.mjs` included) and headings (markdown); `.ps1` is indexed as windowed text.
 - **Edges** come from the source, no LLM: Dart and TS/JS imports, markdown links and backticked
   paths, and *symbol references* — a chunk that mentions a name defined elsewhere. Names defined
   in more than 3 places or mentioned in more than 200 chunks are dropped (they are noise).
@@ -194,8 +194,11 @@ host over ssh; the Codemagic workflow is started from its UI or API (`POST /buil
 
 ## Limits
 
-- Import resolution covers Dart and TypeScript/JavaScript; other languages (Python included)
-  are linked only through symbol references, so their graphs are sparser.
+- Import resolution covers Dart and TypeScript/JavaScript (`.mjs` included); other languages (Python included)
+  are linked only through symbol references, so their graphs are sparser. `.ps1` is windowed text:
+  no declaration parsing, and it stays out of `search_code`. Files must be UTF-8 or BOM-marked
+  Unicode (UTF-16 `.ps1` from PowerShell works; CP1251 and friends are skipped). A few ESM forms
+  lose their symbol, same as in `.js`: `export default @decorator class` and `export async function*`.
 - Tuned and evaluated on English and Russian text.
 - The first index build takes about a minute on a mid-size repository (models load, every chunk
   is embedded once); later builds re-embed only what changed.
