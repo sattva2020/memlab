@@ -188,7 +188,9 @@ python -m memlab eval    --config C --cases cases.json --methods "hybrid,only:co
 | Linux | `python:3.11-slim` container — `scripts/ci-linux.sh user@docker-host` | tests, `claude plugin validate` (plugin + mod) | 46 passed, 3 valid (2026-10-09) |
 | macOS | Codemagic `mac_mini_m2` — `codemagic.yaml`, workflow `macos-check` | tests, plugin validation, one embedding asserting Apple GPU (`mps`) | 46 passed, `device: mps` (2026-10-09) |
 
-GPU: CUDA on Windows/Linux, Apple's MPS on a Mac, the CPU otherwise; the re-ranker needs CUDA. The
+GPU: CUDA on Windows/Linux, Apple's MPS on a Mac, the CPU otherwise; the re-ranker needs CUDA and a
+loadable model — when the model cannot load, indexing and `search_code` continue on the plain
+ranking, with one `reranker_disabled` warning per model per embedder process in `logs/embedder.log`. The
 Linux and macOS checks run outside GitHub Actions: the script copies the working tree to any Docker
 host over ssh; the Codemagic workflow is started from its UI or API (`POST /builds`, workflow `macos-check`).
 
@@ -198,7 +200,9 @@ host over ssh; the Codemagic workflow is started from its UI or API (`POST /buil
   are linked only through symbol references, so their graphs are sparser.
 - Tuned and evaluated on English and Russian text.
 - The first index build takes about a minute on a mid-size repository (models load, every chunk
-  is embedded once); later builds re-embed only what changed.
+  is embedded once); later builds re-embed only what changed. First use downloads models from
+  Hugging Face and needs network; embedding-model failures still stop the build, the optional
+  CUDA re-ranker does not (see Platforms).
 
 ## Research
 

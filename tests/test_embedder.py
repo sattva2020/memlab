@@ -115,3 +115,70 @@ def test_load_kwargs_gemma_is_fp32_text_only():
         mk, ck = embedder.load_kwargs("google/embeddinggemma-2", cuda)
         assert mk == {"torch_dtype": torch.float32}
         assert ck == {"vision_config": None, "audio_config": None}
+
+
+def test_reranker_load_failure_is_negative_cached(monkeypatch, capsys):
+    """A model that cannot load (not cached, hub down) must answer scores=None, not kill the
+    connection: the build's warm-up rerank used to crash the whole index with RemoteDisconnected."""
+    attempts = []
+
+    def broken(model):
+        attempts.append(model)
+        raise RuntimeError("not cached")
+
+    embedder._models.clear()
+    monkeypatch.setattr(embedder, "_load_reranker", broken)
+    monkeypatch.setattr(embedder, "_load", lambda *a: Fake())
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), embedder._Handler)
+    srv.last = time.time()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        for _ in range(3):                    # distinct clients share the negative cache
+            assert embedder.Client("ce", port=srv.server_address[1]).rerank("q", ["a"]) is None
+        assert attempts == ["ce"]
+        assert embedder._models[("rerank", "ce")] is None
+        assert embedder.Client("fake", port=srv.server_address[1]).encode(["a"]).shape == (1, 2)
+    finally:
+        srv.shutdown(); srv.server_close()
+        embedder._models.clear()
+    err = capsys.readouterr().err
+    assert err.count("reranker_disabled") == 1 and "MEMLAB_RERANK=0" in err
+
+
+def test_index_build_survives_a_missing_reranker(monkeypatch, tmp_path, capsys):
+    """End to end: warm's warm-up rerank against a broken loader must leave the index usable."""
+    import subprocess as sp
+    from memlab import serve
+    from memlab.corpus import Chunk
+
+    attempts = []
+
+    def broken(model):
+        attempts.append(model)
+        raise OSError("model not cached")
+
+    embedder._models.clear()
+    monkeypatch.setattr(embedder, "_load_reranker", broken)
+    monkeypatch.setattr(embedder, "_load", lambda *a: Fake())
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), embedder._Handler)
+    srv.last = time.time()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    real_client = embedder.Client
+    monkeypatch.setattr(embedder, "Client",
+                        lambda model, **kw: real_client(model, port=srv.server_address[1], **kw))
+    monkeypatch.setattr(serve.corpus, "build", lambda *a, **k: [
+        Chunk("a.py", "a.py", "alpha", "def alpha():\n    return 1\n")])
+    monkeypatch.setattr(serve.config, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(serve, "journal", lambda *a, **k: None)
+    monkeypatch.delenv("MEMLAB_RERANK", raising=False)
+    try:
+        sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+        ix = serve.Index(tmp_path, {})
+        ix.wait()                             # before the fix: RuntimeError RemoteDisconnected
+        assert ix.error is None and ix.reranker is None
+        assert "a.py" in ix.search_code("alpha", 6000)
+        assert attempts == [serve.RERANKER]   # one load attempt, then the negative cache holds
+    finally:
+        srv.shutdown(); srv.server_close()
+        embedder._models.clear()
+    assert "reranker_disabled" in capsys.readouterr().err
