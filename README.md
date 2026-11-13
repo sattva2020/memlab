@@ -52,6 +52,12 @@ Connect it to your agent — add to the repository's `.mcp.json`:
 }
 ```
 
+Retrieval-only (opt-in): set `"MEMLAB_TOOLS": "retrieval"` in the server's `env` and `add_note`
+disappears from `tools/list` and is denied on call — for hosts where the writing tool needs
+explicit consent. Unset or `"all"` keeps the default five tools; any other value fails startup.
+The mode does not rewrite the hook-written CLAUDE.md guidance or the `/memlab:note` command —
+gate those on the host side too when retrieval-only is the policy.
+
 ### Claude Code plugin
 
 The repository is also a Claude Code plugin: the MCP server, session hooks and three commands in
@@ -69,6 +75,7 @@ You get:
 - `/memlab:status` — which tree is indexed, errors, decision notes at risk, a live search check
 - `/memlab:recall <topic>` — prior decisions and the relevant code, with `path:line` sources
 - `/memlab:note` — drafts this session's decisions as `docs/notes/`, written after you pick
+  (requires `MEMLAB_TOOLS=all`)
 - hooks: the newest decision records at session start (and, in a git worktree, a reminder to pass
   the worktree as `root`), a one-line hint on long prompts when memlab has not been used, and at
   session end `logs/usage.jsonl`: per search, the shown files the session then edited
@@ -110,7 +117,7 @@ first source for project knowledge, where decisions go, worktree `root`. Re-runn
 |---|---|
 | `search_code` | Files, classes and functions relevant to a task, with `path:line`. Code only; on a GPU the top 50 are re-ordered by a multilingual cross-encoder, so a question in Russian finds English code. |
 | `search_decisions` | ADRs, postmortems and session notes that explain *why* — one best passage per document. |
-| `add_note` | Records a decision as a new file in `docs/notes/` (never edits one, so worktrees merge cleanly); searchable at once. |
+| `add_note` | Records a decision as a new file in `docs/notes/` (never edits one, so worktrees merge cleanly); searchable at once. Needs `MEMLAB_TOOLS=all` (the default) — with `retrieval` the tool is not published. |
 | `explain` | A symbol or file: where it is defined, who uses it, what it uses, linked docs and decisions. |
 | `find_path` | The shortest chain of imports and symbol references between two files or symbols. |
 | `graph.html` | One self-contained page: subsystems (Louvain), search, click a file for its symbols and neighbours, deep links (`graph.html#src/hono.ts`). |
